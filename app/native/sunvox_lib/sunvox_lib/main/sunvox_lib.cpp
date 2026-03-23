@@ -12,7 +12,7 @@
 #include "psynth/psynths_metamodule.h"
 #include "psynth/psynths_vorbis_player.h"
 
-// ===== FORTUNED MODIFICATION: Platform-specific logging =====
+// ===== REHORSED MODIFICATION: Platform-specific logging =====
 #ifdef __APPLE__
     #include <os/log.h>
     #define SVLIB_LOG(fmt, ...) os_log(OS_LOG_DEFAULT, "SUNVOX_LIB: " fmt, ##__VA_ARGS__)
@@ -540,7 +540,7 @@ SUNVOX_EXPORT int sv_play( int slot )
 #ifdef DEFERRED_SOUND_STREAM_INIT
     sundog_sound_init_deferred( g_sound );
 #endif
-    // ===== FORTUNED MODIFICATION: Preserve single_pattern_play if already set =====
+    // ===== REHORSED MODIFICATION: Preserve single_pattern_play if already set =====
     // If single_pattern_play is already set (e.g., via sv_set_pattern_loop),
     // pass it to sunvox_play() so NOTECMD_PLAY preserves it instead of resetting to -1
     sunvox_engine* s = g_sv[ slot ];
@@ -683,7 +683,7 @@ SUNVOX_EXPORT JNIEXPORT jint JNICALL Java_nightradio_sunvoxlib_SunVoxLib_set_1pa
 }
 #endif
 
-// ===== FORTUNED MODIFICATION: Pattern loop counting API =====
+// ===== REHORSED MODIFICATION: Pattern loop counting API =====
 SUNVOX_EXPORT int sv_set_pattern_loop_count( int slot, int pat_num, int loops )
 {
     if( check_slot( slot ) ) return -1;
@@ -697,7 +697,7 @@ SUNVOX_EXPORT int sv_set_pattern_loop_count( int slot, int pat_num, int loops )
     // Set loop count (0 = infinite)
     s->pattern_loop_counts[ pat_num ] = loops;
     
-    // FORTUNED MODIFICATION: Always reset the current loop counter when setting the count.
+    // REHORSED MODIFICATION: Always reset the current loop counter when setting the count.
     // The previous conditional logic prevented the counter from resetting if the pattern
     // was already playing, causing incorrect loop counts when switching from loop->song mode.
     s->pattern_current_loop[ pat_num ] = 0;
@@ -1774,6 +1774,95 @@ SUNVOX_EXPORT JNIEXPORT jint JNICALL Java_nightradio_sunvoxlib_SunVoxLib_get_1mo
 }
 #endif
 
+// ===== REHORSED MODIFICATION: Use unified logging system =====
+#include "../../../log.h"
+#undef LOG_TAG
+#define LOG_TAG "SUNVOX_API"
+// ===== END MODIFICATION =====
+
+SUNVOX_EXPORT int sv_set_input_monitor_volume( int slot, int mod_num, int volume )
+{
+    if( check_slot( slot ) ) return -1;
+    prnt_info("🔊 sv_set_input_monitor_volume(slot=%d, mod=%d, vol=%d)", slot, mod_num, volume);
+    // Controller 1 is the Monitor Volume (0-1024, where 256 = 100%)
+    return sv_set_module_ctl_value( slot, mod_num, 1, volume, 0 );
+}
+
+SUNVOX_EXPORT int sv_set_input_recording_volume( int slot, int mod_num, int volume )
+{
+    if( check_slot( slot ) ) return -1;
+    prnt_info("🎙️ sv_set_input_recording_volume(slot=%d, mod=%d, vol=%d)", slot, mod_num, volume);
+    // Controller 0 is the Recording Volume (0-1024, where 256 = 100%)
+    return sv_set_module_ctl_value( slot, mod_num, 0, volume, 0 );
+}
+
+SUNVOX_EXPORT int sv_get_input_monitor_volume( int slot, int mod_num )
+{
+    if( check_slot( slot ) ) return -1;
+    // Controller 1 is the Monitor Volume
+    return sv_get_module_ctl_value( slot, mod_num, 1, 0 );
+}
+
+SUNVOX_EXPORT int sv_get_input_recording_volume( int slot, int mod_num )
+{
+    if( check_slot( slot ) ) return -1;
+    // Controller 0 is the Recording Volume
+    return sv_get_module_ctl_value( slot, mod_num, 0, 0 );
+}
+
+SUNVOX_EXPORT int sv_set_external_recording_active( int slot, int active )
+{
+    if( check_slot( slot ) ) return -1;
+    sunvox_engine* s = g_sv[ slot ];
+    s->external_recording_active = (active != 0);
+    prnt_info("🎙️ sv_set_external_recording_active(slot=%d, active=%d)", slot, active);
+    return 0;
+}
+
+SUNVOX_EXPORT int sv_set_external_monitor_off( int slot, int monitor_off )
+{
+    if( check_slot( slot ) ) return -1;
+    sunvox_engine* s = g_sv[ slot ];
+    s->external_monitor_off = (monitor_off != 0);
+    prnt_info("🔇 sv_set_external_monitor_off(slot=%d, monitor_off=%d)", slot, monitor_off);
+    return 0;
+}
+
+SUNVOX_EXPORT void* sv_get_external_recording_buffer( int slot, int* frames_out )
+{
+    // REHORSED: Old dual-pass approach removed - now using Input module's dual-output
+    // This function is deprecated but kept for compatibility
+    if( check_slot( slot ) ) return NULL;
+    if( frames_out ) *frames_out = 0;
+    return NULL;
+}
+
+SUNVOX_EXPORT void* sv_get_input_module_recording_output( int slot, int mod_num, int channel )
+{
+    if( check_slot( slot ) ) return NULL;
+    sunvox_engine* s = g_sv[ slot ];
+    if( !s->net ) return NULL;
+    if( mod_num < 0 || mod_num >= (int)s->net->mods_num ) return NULL;
+    
+    psynth_module* mod = &s->net->mods[ mod_num ];
+    if( !( mod->flags & PSYNTH_FLAG_EXISTS ) ) return NULL;
+    
+    // Access the Input module's data structure
+    typedef struct {
+        PS_CTYPE ctl_volume;
+        PS_CTYPE ctl_monitor_volume;
+        PS_CTYPE ctl_stereo;
+        PS_STYPE* recording_output[2];
+        int recording_output_allocated;
+    } input_module_data;
+    
+    input_module_data* data = (input_module_data*)mod->data_ptr;
+    if( !data ) return NULL;
+    if( channel < 0 || channel >= 2 ) return NULL;
+    
+    return data->recording_output[ channel ];
+}
+
 SUNVOX_EXPORT int sv_new_pattern( int slot, int clone, int x, int y, int tracks, int lines, int icon_seed, const char* name )
 {
     if( check_slot( slot ) ) return -1;
@@ -1915,7 +2004,7 @@ SUNVOX_EXPORT int sv_get_pattern_lines( int slot, int pat_num )
     sunvox_engine* s = g_sv[ slot ];
     if( (unsigned)pat_num >= (unsigned)s->pats_num ) return 0;
     if( !s->pats[ pat_num ] ) return 0;
-    // FORTUNED FIX (Nov 16, 2025): Return visible line count, not internal buffer size
+    // REHORSED FIX (Nov 16, 2025): Return visible line count, not internal buffer size
     // The audio engine uses pat->lines for playback boundaries, not data_ysize
     // data_ysize is the allocated buffer capacity (may be over-allocated for optimization)
     // lines is the visible/active line count (what user expects and engine uses)
@@ -2094,7 +2183,7 @@ SUNVOX_EXPORT JNIEXPORT jint JNICALL Java_nightradio_sunvoxlib_SunVoxLib_pattern
 #endif
 
 // CUSTOM ADDITION: Function to set pattern flags for seamless looping
-// Added for fortuned project to enable NO_NOTES_OFF flag
+// Added for rehorsed project to enable NO_NOTES_OFF flag
 SUNVOX_EXPORT int sv_pattern_set_flags( int slot, int pat_num, uint32_t flags, int set )
 {
     if( check_slot( slot ) ) return -1;
@@ -2114,7 +2203,7 @@ SUNVOX_EXPORT JNIEXPORT jint JNICALL Java_nightradio_sunvoxlib_SunVoxLib_pattern
 #endif
 
 // CUSTOM ADDITION: Function to enable/disable supertracks mode
-// Added for fortuned project - supertracks mode is required for NO_NOTES_OFF flag to work
+// Added for rehorsed project - supertracks mode is required for NO_NOTES_OFF flag to work
 SUNVOX_EXPORT int sv_enable_supertracks( int slot, int enable )
 {
     if( check_slot( slot ) ) return -1;

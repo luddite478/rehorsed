@@ -34,6 +34,9 @@ final class Sample extends ffi.Struct {
 
   @ffi.Array(SAMPLE_MAX_NAME)
   external ffi.Array<ffi.Char> display_name; // Inline fixed-size array
+
+  @ffi.Int32()
+  external int offset_frames; // Must match native Sample struct layout
 }
 
 // Helper to read C char array into Dart String (null-terminated)

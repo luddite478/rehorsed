@@ -9,12 +9,12 @@ extern "C" {
 
 // Constants
 #define MAX_SEQUENCER_STEPS 2048
-#define MAX_SEQUENCER_COLS 16
+#define MAX_SEQUENCER_COLS 20  // 5 layers × 4 cols/layer
 #define MAX_SAMPLE_SLOTS 26
 #define MAX_SECTIONS 64
 #define DEFAULT_SECTION_STEPS 16
 // Layers (per section)
-#define MAX_LAYERS_PER_SECTION 4
+#define MAX_LAYERS_PER_SECTION 5
 #define MAX_COLS_PER_LAYER 4
 
 // Pitch configuration
@@ -106,6 +106,40 @@ void table_set_section(int index, int start_step, int num_steps, int undo_record
 
 __attribute__((visibility("default"))) __attribute__((used))
 void table_set_layer_len(int section_index, int layer_index, int len, int undo_record);
+
+// Layer mute/solo (per-layer, applies to all sections)
+__attribute__((visibility("default"))) __attribute__((used))
+void table_set_layer_mute(int layer, int mute);
+
+__attribute__((visibility("default"))) __attribute__((used))
+void table_set_layer_solo(int layer, int solo);
+
+__attribute__((visibility("default"))) __attribute__((used))
+int table_get_layer_mute(int layer);
+
+__attribute__((visibility("default"))) __attribute__((used))
+int table_get_layer_solo(int layer);
+
+__attribute__((visibility("default"))) __attribute__((used))
+int table_get_layer_for_col(int section, int col);
+
+// Per-column mute/solo:
+// - mute is per (layer, col_in_layer)
+// - solo is per (layer, col_in_layer)
+__attribute__((visibility("default"))) __attribute__((used))
+void table_set_layer_col_mute(int layer, int col_in_layer, int mute);
+
+__attribute__((visibility("default"))) __attribute__((used))
+int table_get_layer_col_mute(int layer, int col_in_layer);
+
+__attribute__((visibility("default"))) __attribute__((used))
+void table_set_layer_col_solo(int layer, int col_in_layer, int solo);
+
+__attribute__((visibility("default"))) __attribute__((used))
+int table_get_layer_col_solo(int layer, int col_in_layer);
+
+__attribute__((visibility("default"))) __attribute__((used))
+int table_get_col_in_layer(int section, int col);
 
 
 // Getters for table dimensions

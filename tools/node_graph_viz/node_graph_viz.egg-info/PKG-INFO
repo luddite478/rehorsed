@@ -28,7 +28,7 @@ References: [miniaudio manual](https://miniaud.io/docs/manual/index.html), [node
 # Install uv if not installed
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
-cd /Users/romansmirnov/projects/fortuned/tools/node_graph_viz
+cd /Users/romansmirnov/projects/rehorsed/tools/node_graph_viz
 uv venv
 . .venv/bin/activate
 uv pip install -e .

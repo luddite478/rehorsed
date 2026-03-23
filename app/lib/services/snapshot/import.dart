@@ -308,29 +308,29 @@ class SnapshotImporter {
       debugPrint('🔄 [SNAPSHOT_IMPORT] Importing layers for all sections');
       final layersLenFlat = <int>[];
       
-      // We must provide layer data for ALL sections (4 layers per section)
+      // We must provide layer data for ALL sections (5 layers per section)
       for (int s = 0; s < sectionsCount; s++) {
         if (s < layers.length) {
           final sectionLayers = layers[s] as List<dynamic>;
           debugPrint('  Section $s layers: ${sectionLayers.length} layers');
           
-          // Import all 4 layers for this section
-          for (int l = 0; l < 4; l++) {
+          // Import all 5 layers for this section
+          for (int l = 0; l < 5; l++) {
             if (l < sectionLayers.length) {
               final len = (sectionLayers[l] as num).toInt();
               layersLenFlat.add(len);
               debugPrint('    Layer $l: $len columns');
             } else {
-              // Default to 4 columns if layer data is missing
-              layersLenFlat.add(4);
-              debugPrint('    Layer $l: 4 columns (default)');
+              // Default to 4 columns if layer data is missing (L4 for mic track defaults to 0)
+              layersLenFlat.add(l == 4 ? 0 : 4);
+              debugPrint('    Layer $l: ${l == 4 ? 0 : 4} columns (default)');
             }
           }
         } else {
-          // If no layer data for this section, use defaults (4 columns per layer)
-          debugPrint('  Section $s: using default layer configuration (4 layers x 4 columns)');
-          for (int l = 0; l < 4; l++) {
-            layersLenFlat.add(4);
+          // If no layer data for this section, use defaults (5 layers, L4 empty for mic)
+          debugPrint('  Section $s: using default layer configuration (5 layers, L4 empty)');
+          for (int l = 0; l < 5; l++) {
+            layersLenFlat.add(l == 4 ? 0 : 4);
           }
         }
       }
@@ -359,6 +359,78 @@ class SnapshotImporter {
           // Set slot and settings
           _tableState.setCell(step, col, sampleSlot, volume, pitch, undoRecord: false);
           cellsImported++;
+        }
+      }
+      
+      // Import layer modes (per-layer operational mode: sequence or rec)
+      if (tableData.containsKey('layer_modes')) {
+        debugPrint('🔄 [SNAPSHOT_IMPORT] Importing layer modes');
+        final layerModesData = tableData['layer_modes'] as Map<String, dynamic>;
+        for (final entry in layerModesData.entries) {
+          final layer = int.parse(entry.key);
+          final modeName = entry.value as String;
+          try {
+            final mode = LayerMode.values.byName(modeName);
+            _tableState.setLayerMode(layer, mode);
+            debugPrint('  Layer $layer: $modeName');
+          } catch (e) {
+            debugPrint('⚠️ [SNAPSHOT_IMPORT] Invalid layer mode for layer $layer: $modeName');
+          }
+        }
+      }
+
+      // Import layer mute/solo (clear all first, then restore from snapshot)
+      _tableState.clearAllLayerMuteSolo();
+      if (tableData.containsKey('layer_muted')) {
+        final layerMutedData = tableData['layer_muted'] as Map<String, dynamic>;
+        for (final entry in layerMutedData.entries) {
+          final layer = int.parse(entry.key);
+          final muted = entry.value == true;
+          _tableState.setLayerMuted(layer, muted);
+        }
+      }
+      if (tableData.containsKey('layer_soloed')) {
+        final layerSoloedData = tableData['layer_soloed'] as Map<String, dynamic>;
+        for (final entry in layerSoloedData.entries) {
+          final layer = int.parse(entry.key);
+          final soloed = entry.value == true;
+          _tableState.setLayerSoloed(layer, soloed);
+        }
+      }
+      if (tableData.containsKey('layer_column_muted')) {
+        final layerColumnMutedData = tableData['layer_column_muted'] as Map<String, dynamic>;
+        for (final entry in layerColumnMutedData.entries) {
+          final parts = entry.key.split(':');
+          if (parts.length != 2) continue;
+          final layer = int.tryParse(parts[0]);
+          final col = int.tryParse(parts[1]);
+          if (layer == null || col == null) continue;
+          final muted = entry.value == true;
+          _tableState.setLayerColumnMuted(layer, col, muted);
+        }
+      }
+      if (tableData.containsKey('layer_column_soloed')) {
+        final layerColumnSoloedData = tableData['layer_column_soloed'] as Map<String, dynamic>;
+        for (final entry in layerColumnSoloedData.entries) {
+          final parts = entry.key.split(':');
+          if (parts.length != 2) continue;
+          final layer = int.tryParse(parts[0]);
+          final col = int.tryParse(parts[1]);
+          if (layer == null || col == null) continue;
+          final soloed = entry.value == true;
+          _tableState.setLayerColumnSoloed(layer, col, soloed);
+        }
+      } else if (tableData.containsKey('column_soloed')) {
+        // Backward compatibility: old snapshots stored global column solo.
+        // Apply it to every layer to preserve previous audible intent.
+        final columnSoloedData = tableData['column_soloed'] as Map<String, dynamic>;
+        for (final entry in columnSoloedData.entries) {
+          final col = int.tryParse(entry.key);
+          if (col == null) continue;
+          final soloed = entry.value == true;
+          for (int layer = 0; layer < TableState.maxLayersPerSection; layer++) {
+            _tableState.setLayerColumnSoloed(layer, col, soloed);
+          }
         }
       }
       

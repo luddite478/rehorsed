@@ -28,6 +28,7 @@ typedef struct {
     char sample_id[SAMPLE_MAX_ID];      // Stable ID for the sample (optional)
     char file_path[SAMPLE_MAX_PATH];    // Path to sample file (empty string if none)
     char display_name[SAMPLE_MAX_NAME]; // Display name for UI (empty string if none)
+    int offset_frames;                  // Sample offset in frames (for precise positioning)
 } Sample;
 
 // Single live sample bank state (authoritative)

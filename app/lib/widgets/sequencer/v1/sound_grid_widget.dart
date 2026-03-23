@@ -1134,7 +1134,7 @@ class _SampleGridWidgetState extends State<SampleGridWidget> {
   Widget _buildGridRowControls(TableState tableState) {
     return Container(
       height: 30, // Reduced height from 40 to 30
-      margin: const EdgeInsets.symmetric(horizontal: 16), // Full width like grid rows
+      margin: EdgeInsets.zero, // Remove margin to match grid width
       child: Row(
         children: [
           // Remove rows button - left half
@@ -1143,10 +1143,7 @@ class _SampleGridWidgetState extends State<SampleGridWidget> {
               isEnabled: tableState.getSectionStepCount() > 4,
               onAction: () => _handleDecreaseRows(tableState),
               icon: Icons.remove,
-              borderRadius: const BorderRadius.only(
-                topLeft: Radius.circular(6),
-                bottomLeft: Radius.circular(6),
-              ),
+              borderRadius: BorderRadius.zero, // Sharp corners
               isPressed: _isDecreasePressed,
               buttonType: 'decrease',
             ),
@@ -1158,10 +1155,7 @@ class _SampleGridWidgetState extends State<SampleGridWidget> {
               isEnabled: tableState.getSectionStepCount() < tableState.maxSteps,
               onAction: () => _handleIncreaseRows(tableState),
               icon: Icons.add,
-              borderRadius: const BorderRadius.only(
-                topRight: Radius.circular(6),
-                bottomRight: Radius.circular(6),
-              ),
+              borderRadius: BorderRadius.zero, // Sharp corners
               isPressed: _isIncreasePressed,
               buttonType: 'increase',
             ),

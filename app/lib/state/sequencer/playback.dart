@@ -205,6 +205,8 @@ class PlaybackState extends ChangeNotifier {
     }
   }
 
+  // NOTE: sv_audio_callback2 bypass methods removed - mic bypasses SunVox entirely now
+
   // ===== Live preview helpers (UI wires these with debounce) =====
   void previewSampleSlot(int slot, {required double pitchRatio, required double volume01}) {
     if (!_initialized) return;
@@ -372,6 +374,7 @@ class PlaybackState extends ChangeNotifier {
     }
     
     if (_currentSectionLoop != nativePlaybackState.currentSectionLoop) {
+      debugPrint('🔄 [LOOP_COUNTER_DEBUG] Flutter: $_currentSectionLoop → ${nativePlaybackState.currentSectionLoop} (songMode=$_songMode)');
       _currentSectionLoop = nativePlaybackState.currentSectionLoop;
       currentSectionLoopNotifier.value = nativePlaybackState.currentSectionLoop;
       anyChanged = true;

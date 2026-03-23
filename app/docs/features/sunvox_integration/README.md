@@ -1,13 +1,13 @@
 # SunVox Integration Guide
 
 BUILD:
-`fortuned/app/native/sunvox_lib/sunvox_lib/make && chmod +x MAKE_IOS && ./MAKE_IOS`
+`rehorsed/app/native/sunvox_lib/sunvox_lib/make && chmod +x MAKE_IOS && ./MAKE_IOS`
 
 ---
 
 ## 1. Overview
 
-This documentation provides a complete guide to the integration of the SunVox audio engine into the Fortuned sequencer application. The integration includes several critical custom modifications to the SunVox library to support the app's unique sequencing and playback requirements.
+This documentation provides a complete guide to the integration of the SunVox audio engine into the Rehorsed sequencer application. The integration includes several critical custom modifications to the SunVox library to support the app's unique sequencing and playback requirements.
 
 The key features of this integration are:
 - ✅ **No-Clone Sequencing:** A sample-accurate pattern looping system that avoids memory-intensive pattern clones.
@@ -22,8 +22,8 @@ The key features of this integration are:
 For detailed information on specific features, please refer to the following documents:
 
 ### 📚 Architecture & Overview
-- **[SUNVOX_LIBRARY_ARCHITECTURE.md](./SUNVOX_LIBRARY_ARCHITECTURE.md)**: Complete SunVox library architecture guide (general, not Fortuned-specific). Read this first to understand how SunVox works.
-- **[sunvox_fortuned_tweaks.md](./sunvox_fortuned_tweaks.md)**: Fortuned-specific modifications, integrations, control capabilities, and future plans. **Read this for Fortuned-specific information.**
+- **[SUNVOX_LIBRARY_ARCHITECTURE.md](./SUNVOX_LIBRARY_ARCHITECTURE.md)**: Complete SunVox library architecture guide (general, not Rehorsed-specific). Read this first to understand how SunVox works.
+- **[sunvox_rehorsed_tweaks.md](./sunvox_rehorsed_tweaks.md)**: Rehorsed-specific modifications, integrations, control capabilities, and future plans. **Read this for Rehorsed-specific information.**
 
 ### 🚀 Core Implementation
 - **[no_clone.md](./no_clone.md)**: A comprehensive guide to the sample-accurate, no-clone pattern sequencing implementation. **This is the core of the sequencer logic.**

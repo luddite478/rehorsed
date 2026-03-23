@@ -223,7 +223,7 @@ Possible improvements for the future:
 
 # Log Level System
 
-This document describes the log level filtering system implemented in the Fortuned app to reduce log spam and improve debugging experience.
+This document describes the log level filtering system implemented in the Rehorsed app to reduce log spam and improve debugging experience.
 
 ## Overview
 
@@ -263,7 +263,7 @@ LOG_LEVEL=info
 Use the `Log` utility class from `lib/utils/log.dart`:
 
 ```dart
-import 'package:fortuned/utils/log.dart';
+import 'package:rehorsed/utils/log.dart';
 
 // Debug logs (only shown at debug level)
 Log.d('Detailed debug information', 'TAG');

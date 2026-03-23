@@ -242,7 +242,7 @@ For 20 samples: 60 GB ❌ IMPOSSIBLE!
 
 ## THE SOLUTION: Column-Based Effect Chains
 
-**This is the OPTIMAL architecture for Fortuned!** 🎯
+**This is the OPTIMAL architecture for Rehorsed!** 🎯
 
 ### Core Concept
 
@@ -250,7 +250,7 @@ Instead of creating thousands of preset modules, create **one effect chain per c
 
 ### Key Insight
 
-**Fortuned has column canceling behavior:**
+**Rehorsed has column canceling behavior:**
 - Only ONE note plays per column at a time
 - New note in same column CANCELS previous note
 - This means we can safely change effect settings between notes!
@@ -906,7 +906,7 @@ sunvox_wrapper_load_sample(2, "kick.wav");  // Not duplicated!
 
 ### PRIMARY RECOMMENDATION: Column-Based Effect Chains ✅ 🎯
 
-**This is the optimal architecture for Fortuned!**
+**This is the optimal architecture for Rehorsed!**
 
 ```
 Architecture:

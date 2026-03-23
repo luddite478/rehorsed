@@ -6,7 +6,7 @@ Version: 2.1.2b
 Based on: `/app/native/sunvox_lib/`  
 Official Documentation: https://warmplace.ru/soft/sunvox/sunvox_lib.php
 
-> **Note:** This document covers **general SunVox architecture**. For **Fortuned-specific modifications, integrations, and control capabilities**, see `sunvox_fortuned_tweaks.md`.
+> **Note:** This document covers **general SunVox architecture**. For **Rehorsed-specific modifications, integrations, and control capabilities**, see `sunvox_rehorsed_tweaks.md`.
 
 ---
 
@@ -235,7 +235,7 @@ sv_play(0);  // Start playback on slot 0
 **Playback Modes:**
 
 1. **Timeline Mode**: Play through all patterns sequentially
-2. **Pattern Loop Mode**: Loop a single pattern (added by Fortuned modifications)
+2. **Pattern Loop Mode**: Loop a single pattern (added by Rehorsed modifications)
 3. **Autostop**: Stop at end of project vs. loop forever
 
 ### 3.6 Audio Callback
@@ -508,7 +508,7 @@ struct sunvox_engine {
     int restart_pos;             // Project restart position
     bool stop_at_the_end_of_proj; // Autostop flag
     
-    // Pattern loop counting (Fortuned modifications)
+    // Pattern loop counting (Rehorsed modifications)
     int pattern_loop_counts[256];      // Loop count per pattern
     int pattern_current_loop[256];     // Current loop iteration
     int pattern_sequence[64];          // Pattern playback order
@@ -589,7 +589,7 @@ struct sunvox_pattern {
 
 **Pattern Flags:**
 - `SUNVOX_PATTERN_FLAG_NO_ICON`: Don't show icon
-- `SUNVOX_PATTERN_FLAG_NO_NOTES_OFF`: Seamless looping (Fortuned mod)
+- `SUNVOX_PATTERN_FLAG_NO_NOTES_OFF`: Seamless looping (Rehorsed mod)
 
 **Data Layout:**
 - `data` is a flat array: `data[line * data_xsize + track]`
@@ -1439,7 +1439,7 @@ int lead = sv_new_pattern(slot, -1, 32, 3, 4, 16, 0, "Lead");
 - Advanced timeline arrangements
 - Better scalability for complex projects
 
-> **Note:** For Fortuned-specific usage of supertracks, see `sunvox_fortuned_tweaks.md`
+> **Note:** For Rehorsed-specific usage of supertracks, see `sunvox_rehorsed_tweaks.md`
 
 ### 8.4 Pattern Clones
 
@@ -1537,7 +1537,7 @@ sv_set_autostop(slot, 0);  // 0 = loop forever
 sv_set_autostop(slot, 1);  // 1 = stop at end
 ```
 
-> **Note:** Fortuned has added extended pattern loop features including loop counting and automatic pattern advancement. See `sunvox_fortuned_tweaks.md` for details.
+> **Note:** Rehorsed has added extended pattern loop features including loop counting and automatic pattern advancement. See `sunvox_rehorsed_tweaks.md` for details.
 
 ---
 
@@ -2251,9 +2251,9 @@ sv_audio_callback(buffer, frames, 0, sv_get_ticks());
 
 ### 11.5 Custom Extensions and Modifications
 
-The SunVox library can be extended with custom features. The Fortuned project has added several modifications for seamless pattern looping, loop counting, and automatic pattern advancement.
+The SunVox library can be extended with custom features. The Rehorsed project has added several modifications for seamless pattern looping, loop counting, and automatic pattern advancement.
 
-> **For Fortuned-specific pattern loop features, see:** `sunvox_fortuned_tweaks.md`  
+> **For Rehorsed-specific pattern loop features, see:** `sunvox_rehorsed_tweaks.md`  
 > **For source code modifications, see:** `/app/native/sunvox_lib/MODIFICATIONS.md`
 
 ### 11.6 Thread Safety Tips
@@ -2302,12 +2302,12 @@ The SunVox library source code can be modified to add custom features. Applicati
 
 **Example: Custom Pattern Features**
 
-The Fortuned project has added several modifications including:
+The Rehorsed project has added several modifications including:
 - Seamless pattern looping (NO_NOTES_OFF flag)
 - Pattern loop counting with automatic advancement
 - Seamless position changes without audio interruption
 
-> **See:** `sunvox_fortuned_tweaks.md` for complete details on Fortuned's modifications  
+> **See:** `sunvox_rehorsed_tweaks.md` for complete details on Rehorsed's modifications  
 > **See:** `/app/native/sunvox_lib/MODIFICATIONS.md` for technical implementation
 
 ### 12.2 Custom Module Development
@@ -2508,8 +2508,8 @@ SunDog layer handles platform differences:
 - Radiant Voices: Python library for SunVox file manipulation
 - SunVox Mobile: Full SunVox app for iOS/Android
 
-**Fortuned-Specific Documentation:**
-- `sunvox_fortuned_tweaks.md` - Fortuned's modifications, integrations, and control capabilities
+**Rehorsed-Specific Documentation:**
+- `sunvox_rehorsed_tweaks.md` - Rehorsed's modifications, integrations, and control capabilities
 - `/app/native/sunvox_lib/MODIFICATIONS.md` - Technical details of source code modifications
 - `/app/docs/features/sunvox_integration/` - Complete integration documentation
 
@@ -2626,7 +2626,7 @@ sunvox_lib/
 - `sv_pause()` - Pause playback
 - `sv_resume()` - Resume playback
 - `sv_rewind()` - Rewind to position
-- `sv_set_position()` - Seamless position change (Fortuned mod)
+- `sv_set_position()` - Seamless position change (Rehorsed mod)
 
 **Pattern Operations:**
 - `sv_new_pattern()` - Create pattern
@@ -2649,7 +2649,7 @@ sunvox_lib/
 **Events:**
 - `sv_send_event()` - Send real-time event
 
-**Pattern Looping (Fortuned Mods):**
+**Pattern Looping (Rehorsed Mods):**
 - `sv_set_pattern_loop()` - Enable pattern loop mode
 - `sv_set_pattern_loop_count()` - Set loop count
 - `sv_set_pattern_sequence()` - Set pattern order

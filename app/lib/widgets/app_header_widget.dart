@@ -3,7 +3,8 @@ import 'package:provider/provider.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../state/sequencer/playback.dart';
 import '../state/sequencer/recording.dart';
-import '../state/threads_state.dart';
+import '../state/sequencer/microphone.dart';
+import '../state/patterns_state.dart';
 import '../screens/sequencer_settings_screen.dart';
 import '../utils/app_colors.dart';
 
@@ -11,7 +12,6 @@ enum HeaderMode {
   checkpoints,
   sequencer,
   sequencerSettings,
-  thread,
 }
 
 class AppHeaderWidget extends StatelessWidget implements PreferredSizeWidget {
@@ -114,16 +114,15 @@ class AppHeaderWidget extends StatelessWidget implements PreferredSizeWidget {
           ),
         );
       case HeaderMode.checkpoints:
-      case HeaderMode.thread:
-        return Consumer<ThreadsState>(
-          builder: (context, threadsState, child) {
-            final thread = threadsState.currentThread;
+        return Consumer<PatternsState>(
+          builder: (context, patternsState, child) {
+            final pattern = patternsState.activePattern;
             return Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
-                  title ?? (thread != null ? 'Thread ${thread.id.substring(0, 8)}' : 'Thread'),
+                  title ?? (pattern != null ? 'Pattern ${pattern.id.substring(0, 8)}' : 'Pattern'),
                   style: _isPhoneBookMode 
                       ? GoogleFonts.sourceSans3(
                           fontSize: 16, 
@@ -133,9 +132,9 @@ class AppHeaderWidget extends StatelessWidget implements PreferredSizeWidget {
                         )
                       : const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                 ),
-                if (subtitle != null || thread != null)
+                if (subtitle != null || pattern != null)
                   Text(
-                    subtitle ?? '${thread?.users.length ?? 0} collaborators • ${thread?.messageIds.length ?? 0} messages',
+                    subtitle ?? '${pattern?.checkpointIds.length ?? 0} checkpoints',
                     style: _isPhoneBookMode
                         ? GoogleFonts.sourceSans3(
                             fontSize: 11,
@@ -162,8 +161,7 @@ class AppHeaderWidget extends StatelessWidget implements PreferredSizeWidget {
         // No actions for settings screen (just back button)
         return [];
       case HeaderMode.checkpoints:
-      case HeaderMode.thread:
-        return _buildThreadActions(context);
+        return []; // No actions for checkpoints
     }
   }
 
@@ -304,7 +302,21 @@ class AppHeaderWidget extends StatelessWidget implements PreferredSizeWidget {
                           Icons.fiber_manual_record,
                           color: AppColors.sequencerAccent,
                         ),
-                        onPressed: () => rs.startRecording(),
+                        onPressed: () async {
+                          final playbackState = context.read<PlaybackState>();
+                          if (!playbackState.isPlaying) {
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text('Start playback before pattern recording.'),
+                                  duration: Duration(seconds: 2),
+                                ),
+                              );
+                            }
+                            return;
+                          }
+                          await rs.requestRecording();
+                        },
                         iconSize: 16,
                         padding: const EdgeInsets.all(2),
                         constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
@@ -355,27 +367,31 @@ class AppHeaderWidget extends StatelessWidget implements PreferredSizeWidget {
     ];
   }
 
-  List<Widget> _buildThreadActions(BuildContext context) {
-    return [
-      if (showProjectInfo && onInfo != null)
-        IconButton(
-          icon: Icon(
-            Icons.info_outline,
-            color: _isPhoneBookMode ? AppColors.menuText : Colors.white,
-          ),
-          onPressed: onInfo,
-          iconSize: 18,
-        ),
-    ];
-  }
+  // _buildThreadActions removed in offline transformation
 
   void _navigateToSequencerSettings(BuildContext context) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (context) => const SequencerSettingsScreen(),
-      ),
-    );
+    // Try to pass MicrophoneState if available (from sequencer screen)
+    // If not available (from other screens), settings will show placeholder
+    try {
+      final microphoneState = Provider.of<MicrophoneState>(context, listen: false);
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => ChangeNotifierProvider.value(
+            value: microphoneState,
+            child: const SequencerSettingsScreen(),
+          ),
+        ),
+      );
+    } catch (e) {
+      // MicrophoneState not available - navigate without it
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => const SequencerSettingsScreen(),
+        ),
+      );
+    }
   }
 
   // Test navigation removed (unused)

@@ -215,7 +215,9 @@ void sunvox_engine_init(
     s->freq = freq;
     s->single_pattern_play = -1;
     s->next_single_pattern_play = -1;
-    // ===== FORTUNED MODIFICATION: Initialize pattern loop counting =====
+    s->external_recording_active = false;  // REHORSED: Initialize external recording flag
+    s->external_monitor_off = false;       // REHORSED: Initialize monitor state
+    // ===== REHORSED MODIFICATION: Initialize pattern loop counting =====
     for( int i = 0; i < SUNVOX_MAX_PATTERN_LOOP_TRACKING; i++ )
     {
         s->pattern_loop_counts[ i ] = 0;   // Default: infinite loop
@@ -414,6 +416,7 @@ void sunvox_engine_close( sunvox_engine* s )
 #ifndef NOMIDI
     smem_free( s->midi );
 #endif
+    // REHORSED: Old external recording buffer code removed (now using Input module dual-output)
 }
 void sunvox_rename( sunvox_engine* s, const char* proj_name )
 {

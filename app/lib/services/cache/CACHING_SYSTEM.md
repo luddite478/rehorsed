@@ -390,10 +390,10 @@ unawaited(_uploadRecordingInBackground(messageId, mp3Path));
 All cache services are ready to use - just import and call:
 
 ```dart
-import 'package:fortuned/services/cache/threads_cache_service.dart';
-import 'package:fortuned/services/cache/messages_cache_service.dart';
-import 'package:fortuned/services/cache/snapshots_cache_service.dart';
-import 'package:fortuned/services/cache/offline_sync_service.dart';
+import 'package:rehorsed/services/cache/threads_cache_service.dart';
+import 'package:rehorsed/services/cache/messages_cache_service.dart';
+import 'package:rehorsed/services/cache/snapshots_cache_service.dart';
+import 'package:rehorsed/services/cache/offline_sync_service.dart';
 ```
 
 ### Example: Thread View
@@ -945,7 +945,7 @@ curl "http://your-server/api/v1/audio/stats?token=$TOKEN"
 
 The entire caching system is **implemented and ready to use**. Just use the services in your app code - everything works automatically!
 
-For server deployment of audio deduplication, see `/Users/romansmirnov/projects/fortuned/DEPLOY_NOW.md`
+For server deployment of audio deduplication, see `/Users/romansmirnov/projects/rehorsed/DEPLOY_NOW.md`
 
 ---
 

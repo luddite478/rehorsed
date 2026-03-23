@@ -1,4 +1,4 @@
-# Fortuned Server HTTPS Setup
+# Rehorsed Server HTTPS Setup
 
 Simple HTTPS setup with HAProxy and Let's Encrypt.
 

@@ -65,7 +65,7 @@ We need to determine:
 
 ### 1. Rebuild
 ```bash
-cd /Users/romansmirnov/projects/fortuned
+cd /Users/romansmirnov/projects/rehorsed
 ./run.sh
 ```
 

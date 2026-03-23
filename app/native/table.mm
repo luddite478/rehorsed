@@ -26,6 +26,15 @@
 // Global table state consolidated into a single struct
 static TableState g_table_state; // zero-initialized
 
+// Layer mute/solo state (per-layer index 0..MAX_LAYERS_PER_SECTION-1)
+static uint8_t g_layer_mute[MAX_LAYERS_PER_SECTION] = {0};
+static uint8_t g_layer_solo[MAX_LAYERS_PER_SECTION] = {0};
+// Per-column mute/solo:
+// - mute is per (layer, col_in_layer)
+// - solo is per (layer, col_in_layer)
+static uint8_t g_layer_col_mute[MAX_LAYERS_PER_SECTION][MAX_COLS_PER_LAYER] = {{0}};
+static uint8_t g_layer_col_solo[MAX_LAYERS_PER_SECTION][MAX_COLS_PER_LAYER] = {{0}};
+
 // Flag to disable automatic SunVox sync during bulk operations (import/undo/redo)
 static int g_disable_sunvox_sync = 0;
 
@@ -51,8 +60,8 @@ static inline void table_set_cell_defaults(Cell* cell) {
 // This ensures there are no gaps or overlaps in the section ranges
 // Call this after any operation that modifies section structure or step counts
 static void table_recompute_section_starts(void) {
-    prnt_info("🔧 [TABLE_RECOMPUTE] === RECOMPUTING SECTION STARTS ===");
-    prnt_info("🔧 [TABLE_RECOMPUTE] Sections count: %d", g_table_state.sections_count);
+    prnt_debug("🔧 [TABLE_RECOMPUTE] === RECOMPUTING SECTION STARTS ===");
+    prnt_debug("🔧 [TABLE_RECOMPUTE] Sections count: %d", g_table_state.sections_count);
     
     int cursor = 0;
     for (int i = 0; i < g_table_state.sections_count; i++) {
@@ -60,19 +69,24 @@ static void table_recompute_section_starts(void) {
         int num_steps = g_table_state.sections[i].num_steps;
         g_table_state.sections[i].start_step = cursor;
         
-        prnt_info("🔧 [TABLE_RECOMPUTE]   Section %d: start %d → %d, steps: %d", 
+        prnt_debug("🔧 [TABLE_RECOMPUTE]   Section %d: start %d -> %d, steps: %d",
                   i, old_start, cursor, num_steps);
         
         cursor += num_steps;
     }
     
-    prnt_info("🔧 [TABLE_RECOMPUTE] Total steps after recompute: %d", cursor);
-    prnt_info("🔧 [TABLE_RECOMPUTE] === RECOMPUTE COMPLETE ===");
+    prnt_debug("🔧 [TABLE_RECOMPUTE] Total steps after recompute: %d", cursor);
+    prnt_debug("🔧 [TABLE_RECOMPUTE] === RECOMPUTE COMPLETE ===");
 }
 
 // Initialize table with default values
 void table_init(void) {
     prnt_debug("🎵 [TABLE] Initializing table: %d x %d", MAX_SEQUENCER_STEPS, MAX_SEQUENCER_COLS);
+    // Reset mute/solo state so every table init starts from a neutral audible state.
+    memset(g_layer_mute, 0, sizeof(g_layer_mute));
+    memset(g_layer_solo, 0, sizeof(g_layer_solo));
+    memset(g_layer_col_mute, 0, sizeof(g_layer_col_mute));
+    memset(g_layer_col_solo, 0, sizeof(g_layer_col_solo));
     
     // Clear all cells
     for (int step = 0; step < MAX_SEQUENCER_STEPS; step++) {
@@ -98,7 +112,7 @@ void table_init(void) {
     g_table_state.sections_ptr = &g_table_state.sections[0];
     g_table_state.layers_ptr = &g_table_state.layers[0][0];
     
-    prnt_info("✅ [TABLE] Table initialized successfully");
+    prnt("✅ [TABLE] Table initialized successfully");
 
     // Note: SunVox patterns will be created in playback_init() after SunVox is initialized
     // Do not seed undo/redo baseline here; a single baseline is recorded after all modules init
@@ -709,7 +723,7 @@ void table_set_section(int index, int start_step, int num_steps, int undo_record
     table_recompute_section_starts();
     state_write_end();
 
-    prnt("[TABLE] Set section %d (start=%d, steps=%d)", index, start_step, num_steps);
+    prnt("📐 [TABLE] Set section %d (start=%d, steps=%d)", index, start_step, num_steps);
 
     if (undo_record) {
         UndoRedoManager_record();
@@ -735,11 +749,89 @@ void table_set_layer_len(int section_index, int layer_index, int len, int undo_r
     g_table_state.layers[section_index][layer_index].len = len;
     state_write_end();
 
-    prnt("[TABLE] Set layer len section=%d layer=%d len=%d", section_index, layer_index, len);
+    prnt("📏 [TABLE] Set layer len section=%d layer=%d len=%d", section_index, layer_index, len);
 
     if (undo_record) {
         UndoRedoManager_record();
     }
+}
+
+// Layer mute/solo
+void table_set_layer_mute(int layer, int mute) {
+    if (layer < 0 || layer >= MAX_LAYERS_PER_SECTION) return;
+    g_layer_mute[layer] = mute ? 1 : 0;
+}
+
+void table_set_layer_solo(int layer, int solo) {
+    if (layer < 0 || layer >= MAX_LAYERS_PER_SECTION) return;
+    g_layer_solo[layer] = solo ? 1 : 0;
+}
+
+int table_get_layer_mute(int layer) {
+    if (layer < 0 || layer >= MAX_LAYERS_PER_SECTION) return 0;
+    return g_layer_mute[layer] ? 1 : 0;
+}
+
+int table_get_layer_solo(int layer) {
+    if (layer < 0 || layer >= MAX_LAYERS_PER_SECTION) return 0;
+    return g_layer_solo[layer] ? 1 : 0;
+}
+
+__attribute__((visibility("default"))) __attribute__((used))
+void table_set_layer_col_mute(int layer, int col_in_layer, int mute) {
+    if (layer < 0 || layer >= MAX_LAYERS_PER_SECTION) return;
+    if (col_in_layer < 0 || col_in_layer >= MAX_COLS_PER_LAYER) return;
+    g_layer_col_mute[layer][col_in_layer] = mute ? 1 : 0;
+}
+
+__attribute__((visibility("default"))) __attribute__((used))
+int table_get_layer_col_mute(int layer, int col_in_layer) {
+    if (layer < 0 || layer >= MAX_LAYERS_PER_SECTION) return 0;
+    if (col_in_layer < 0 || col_in_layer >= MAX_COLS_PER_LAYER) return 0;
+    return g_layer_col_mute[layer][col_in_layer] ? 1 : 0;
+}
+
+__attribute__((visibility("default"))) __attribute__((used))
+void table_set_layer_col_solo(int layer, int col_in_layer, int solo) {
+    if (layer < 0 || layer >= MAX_LAYERS_PER_SECTION) return;
+    if (col_in_layer < 0 || col_in_layer >= MAX_COLS_PER_LAYER) return;
+    g_layer_col_solo[layer][col_in_layer] = solo ? 1 : 0;
+}
+
+__attribute__((visibility("default"))) __attribute__((used))
+int table_get_layer_col_solo(int layer, int col_in_layer) {
+    if (layer < 0 || layer >= MAX_LAYERS_PER_SECTION) return 0;
+    if (col_in_layer < 0 || col_in_layer >= MAX_COLS_PER_LAYER) return 0;
+    return g_layer_col_solo[layer][col_in_layer] ? 1 : 0;
+}
+
+// Map column to layer index for a given section (uses layers[section] lengths)
+int table_get_layer_for_col(int section, int col) {
+    if (section < 0 || section >= g_table_state.sections_count) return -1;
+    if (col < 0 || col >= MAX_SEQUENCER_COLS) return -1;
+
+    int start = 0;
+    for (int l = 0; l < MAX_LAYERS_PER_SECTION; l++) {
+        int len = g_table_state.layers[section][l].len;
+        if (col < start + len) return l;
+        start += len;
+    }
+    return -1;
+}
+
+// Map absolute column to column index within its layer for a given section.
+// Returns -1 if column is outside all layer ranges.
+int table_get_col_in_layer(int section, int col) {
+    if (section < 0 || section >= g_table_state.sections_count) return -1;
+    if (col < 0 || col >= MAX_SEQUENCER_COLS) return -1;
+
+    int start = 0;
+    for (int l = 0; l < MAX_LAYERS_PER_SECTION; l++) {
+        int len = g_table_state.layers[section][l].len;
+        if (col < start + len) return col - start;
+        start += len;
+    }
+    return -1;
 }
 
 // Return pointer to unified state for Flutter FFI access

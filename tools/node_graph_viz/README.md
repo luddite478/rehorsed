@@ -22,7 +22,7 @@ References: [miniaudio manual](https://miniaud.io/docs/manual/index.html), [node
 
 ## Quick start (UI only)
 ```bash
-cd /Users/romansmirnov/projects/fortuned/tools/node_graph_viz
+cd /Users/romansmirnov/projects/rehorsed/tools/node_graph_viz
 uv venv
 . .venv/bin/activate
 uv pip install -e .
@@ -31,7 +31,7 @@ uv run node-graph-viz
 
 ## Enable native miniaudio backend (audio)
 ```bash
-cd /Users/romansmirnov/projects/fortuned/tools/node_graph_viz/native
+cd /Users/romansmirnov/projects/rehorsed/tools/node_graph_viz/native
 chmod +x build.sh
 ./build.sh
 # Exports are optional if the dylib is in native/build

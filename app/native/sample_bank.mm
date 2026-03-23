@@ -56,6 +56,7 @@ void sample_bank_init(void) {
         g_sample_bank_state.samples[i].file_path[0] = '\0';
         g_sample_bank_state.samples[i].display_name[0] = '\0';
         g_sample_bank_state.samples[i].sample_id[0] = '\0';
+        g_sample_bank_state.samples[i].offset_frames = 0;
         memset(&g_sample_decoders[i], 0, sizeof(ma_decoder));
     }
     prnt("✅ [SAMPLE_BANK] Initialized with %d slots", MAX_SAMPLE_SLOTS);
@@ -178,6 +179,7 @@ void sample_bank_unload(int slot) {
     g_sample_bank_state.samples[slot].file_path[0] = '\0';
     g_sample_bank_state.samples[slot].display_name[0] = '\0';
     g_sample_bank_state.samples[slot].sample_id[0] = '\0';
+    g_sample_bank_state.samples[slot].offset_frames = 0;
 
     prnt("✅ [SAMPLE_BANK] Sample unloaded from slot %d", slot);
 

@@ -460,7 +460,7 @@ async def delete_message_handler(request: Request, message_id: str, token: str =
                     render_url = render.get("url", "")
                     if render_url:
                         # Extract file key from URL
-                        # URL format: https://fortuned.fra1.digitaloceanspaces.com/prod/renders/uuid.mp3
+                        # URL format: https://rehorsed.fra1.digitaloceanspaces.com/prod/renders/uuid.mp3
                         # We need: prod/renders/uuid.mp3
                         match = re.search(r'\.com/(.+)$', render_url)
                         if match:

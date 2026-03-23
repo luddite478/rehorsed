@@ -95,7 +95,7 @@ class WheelSelectWidget extends StatelessWidget {
               listHeight: availableHeight,
               listWidth: availableWidth,
               squeeze: 0.8, // Tighter squeeze for better centering
-              itemSize: availableWidth * 0.15, // Slightly larger for centering
+              itemSize: availableWidth * 0.10, // Tighter spacing between values
               perspective: 0.003, // Slightly more perspective for depth
               magnification: 1.3, // Magnify center item
               selectTextStyle: GoogleFonts.crimsonPro(
@@ -289,7 +289,7 @@ class _CustomWheelWithGradientState extends State<_CustomWheelWithGradient> {
       quarterTurns: 3,
       child: ListWheelScrollView.useDelegate(
         controller: _scrollController,
-        itemExtent: widget.availableWidth * 0.15,
+        itemExtent: widget.availableWidth * 0.10,
         diameterRatio: 5.0,
         perspective: 0.003,
         squeeze: 0.8,
@@ -312,7 +312,7 @@ class _CustomWheelWithGradientState extends State<_CustomWheelWithGradient> {
                     // Calculate opacity and color based on distance from selected item
                     double scrollOffset = 0.0;
                     if (_scrollController.hasClients && _scrollController.position.hasContentDimensions) {
-                      scrollOffset = _scrollController.offset / (widget.availableWidth * 0.15);
+                      scrollOffset = _scrollController.offset / (widget.availableWidth * 0.10);
                     }
                     
                     final distance = (index - scrollOffset).abs();

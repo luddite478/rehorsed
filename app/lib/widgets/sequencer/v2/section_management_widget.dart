@@ -1,23 +1,28 @@
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
 import 'package:google_fonts/google_fonts.dart';
-import '../../../state/sequencer/table.dart';
+import 'package:provider/provider.dart';
 import '../../../state/sequencer/playback.dart';
+import '../../../state/sequencer/table.dart';
 import '../../../state/sequencer/ui_selection.dart';
 import '../../../utils/app_colors.dart';
 
 class SectionManagementWidget extends StatelessWidget {
   const SectionManagementWidget({super.key});
 
+  static const Color _filmBase = Color(0xFF1E1E1C);
+  static const Color _filmFrameAperture = Color(0xFF2A2A27);
+
   // Responsive sizing percentages
-  static const double _contentHeightPercent = 1.0; // 100% for section tape (no header)
-  static const double _paddingPercent = 0.03; // 3% padding around entire panel
-  static const double _innerPaddingPercent = 0.02; // 2% inner padding for section tape
-  
-  // Section rectangle sizing
-  static const double _sectionWidthPercent = 0.20; // 20% of available width per section
-  static const double _gapWidthPercent = 0.08; // 8% of available width per gap
-  static const double _sectionHeightPercent = 0.65; // 65% of content area height
+  static const double _paddingPercent = 0.025;
+  static const double _innerPaddingPercent = 0.02;
+  static const double _sectionWidthPercent = 0.28;
+  static const double _gapWidthPercent = 0.065;
+  static const double _sectionHeightPercent = 0.84;
+  static const double _minSectionWidth = 56.0;
+  static const double _maxSectionWidth = 84.0;
+  static const double _minGapWidth = 24.0;
+  static const double _maxGapWidth = 40.0;
+  static const double _maxSectionHeight = 64.0;
 
   @override
   Widget build(BuildContext context) {
@@ -27,27 +32,20 @@ class SectionManagementWidget extends StatelessWidget {
           builder: (context, constraints) {
             final panelHeight = constraints.maxHeight;
             final panelWidth = constraints.maxWidth;
-            
-            // Padding & ratios
+
             final padding = panelHeight * _paddingPercent;
-            final innerHeight = panelHeight - padding * 2;
-            final borderThickness = 1.0;
-            final innerHeightAdj = innerHeight - borderThickness * 2;
-            
-            // Full height for section tape (no header)
-            final contentHeight = innerHeightAdj * _contentHeightPercent;
-            
-            final sectionNumberFontSize = (contentHeight * _sectionHeightPercent * 0.45).clamp(12.0, 18.0);
+            final innerHeight = panelHeight - (padding * 2);
+            final innerHeightAdj = innerHeight - 2;
+            final sectionTapeHeight =
+                (innerHeightAdj * _sectionHeightPercent).clamp(0.0, _maxSectionHeight);
+            final sectionNumberFontSize = (sectionTapeHeight * 0.36).clamp(15.0, 24.0);
 
             return Container(
               padding: EdgeInsets.all(padding),
               decoration: BoxDecoration(
                 color: AppColors.sequencerSurfaceBase,
                 borderRadius: BorderRadius.circular(2),
-                border: Border.all(
-                  color: AppColors.sequencerBorder,
-                  width: 1,
-                ),
+                border: Border.all(color: AppColors.sequencerBorder, width: 1),
                 boxShadow: [
                   BoxShadow(
                     color: AppColors.sequencerShadow,
@@ -65,10 +63,9 @@ class SectionManagementWidget extends StatelessWidget {
                 tableState,
                 playbackState,
                 uiSelection,
-                contentHeight,
                 panelWidth,
+                sectionTapeHeight,
                 sectionNumberFontSize,
-                context,
               ),
             );
           },
@@ -81,38 +78,52 @@ class SectionManagementWidget extends StatelessWidget {
     TableState tableState,
     PlaybackState playbackState,
     UiSelectionState uiSelection,
-    double contentHeight,
     double panelWidth,
+    double sectionHeight,
     double fontSize,
-    BuildContext context,
   ) {
-    final sectionWidth = panelWidth * _sectionWidthPercent;
-    final gapWidth = panelWidth * _gapWidthPercent;
-    final sectionHeight = contentHeight * _sectionHeightPercent;
+    final sectionWidth = (panelWidth * _sectionWidthPercent).clamp(_minSectionWidth, _maxSectionWidth);
+    final gapWidth = (panelWidth * _gapWidthPercent).clamp(_minGapWidth, _maxGapWidth);
 
     return Container(
       padding: EdgeInsets.symmetric(
         horizontal: panelWidth * _innerPaddingPercent,
-        vertical: contentHeight * _innerPaddingPercent,
+        vertical: 2,
       ),
       decoration: BoxDecoration(
         color: AppColors.sequencerSurfaceRaised,
-        borderRadius: BorderRadius.circular(2),
+        borderRadius: BorderRadius.circular(6),
         border: Border.all(color: AppColors.sequencerBorder, width: 1),
       ),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: Row(
-          children: _buildSectionElements(
-            tableState,
-            playbackState,
-            uiSelection,
-            sectionWidth,
-            gapWidth,
-            sectionHeight,
-            fontSize,
-          ),
-        ),
+      child: LayoutBuilder(
+        builder: (context, tapeConstraints) {
+          final maxHeight = tapeConstraints.maxHeight.isFinite
+              ? tapeConstraints.maxHeight
+              : sectionHeight;
+          final minSafeHeight = maxHeight < 28 ? maxHeight : 28.0;
+          final safeSectionHeight =
+              (sectionHeight > 0 ? sectionHeight : maxHeight).clamp(minSafeHeight, maxHeight);
+
+          return SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            clipBehavior: Clip.hardEdge,
+            child: SizedBox(
+              height: safeSectionHeight,
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: _buildSectionElements(
+                  tableState,
+                  playbackState,
+                  uiSelection,
+                  sectionWidth,
+                  gapWidth,
+                  safeSectionHeight,
+                  fontSize,
+                ),
+              ),
+            ),
+          );
+        },
       ),
     );
   }
@@ -131,16 +142,23 @@ class SectionManagementWidget extends StatelessWidget {
     final currentPlayingSection = playbackState.currentSection;
     final selectedSection = uiSelection.selectedSection;
     final uiSelectedSection = tableState.uiSelectedSection;
-    
+
     final elements = <Widget>[];
 
     for (int i = 0; i < sectionsCount; i++) {
-      // Gap before section
-      elements.add(_buildGap(i - 1, gapWidth, sectionHeight, tableState, uiSelection, playbackState));
-      
-      // Section tile
       elements.add(
-        _buildSectionRectangle(
+        _buildGap(
+          i - 1,
+          gapWidth,
+          sectionHeight,
+          tableState,
+          uiSelection,
+          playbackState,
+        ),
+      );
+
+      elements.add(
+        _buildSectionCard(
           sectionIndex: i,
           isPlaying: isPlaying && i == currentPlayingSection,
           isSelected: selectedSection == i,
@@ -152,14 +170,22 @@ class SectionManagementWidget extends StatelessWidget {
         ),
       );
     }
-    
-    // Final gap after last section
-    elements.add(_buildGap(sectionsCount - 1, gapWidth, sectionHeight, tableState, uiSelection, playbackState));
+
+    elements.add(
+      _buildGap(
+        sectionsCount - 1,
+        gapWidth,
+        sectionHeight,
+        tableState,
+        uiSelection,
+        playbackState,
+      ),
+    );
 
     return elements;
   }
 
-  Widget _buildSectionRectangle({
+  Widget _buildSectionCard({
     required int sectionIndex,
     required bool isPlaying,
     required bool isSelected,
@@ -169,39 +195,69 @@ class SectionManagementWidget extends StatelessWidget {
     required double fontSize,
     required VoidCallback onTap,
   }) {
+    final apertureColor = isUiSelected
+        ? AppColors.sequencerLightText.withOpacity(0.92)
+        : _filmFrameAperture;
+    final numberColor = isPlaying
+        ? AppColors.sequencerAccent
+        : (isUiSelected ? AppColors.sequencerText : AppColors.sequencerLightText);
+
     return GestureDetector(
       onTap: onTap,
       child: Container(
         width: width,
         height: height,
-        margin: const EdgeInsets.symmetric(horizontal: 2),
+        margin: const EdgeInsets.symmetric(horizontal: 1),
         decoration: BoxDecoration(
-          // Light gray when UI selected (currently viewing), matching bottom bar chain
-          color: isUiSelected ? AppColors.sequencerLightText : AppColors.sequencerSurfaceBase,
-          borderRadius: BorderRadius.circular(2),
+          color: _filmBase,
+          borderRadius: BorderRadius.circular(5),
           border: Border.all(
-            color: isSelected ? AppColors.sequencerSelectionBorder : AppColors.sequencerBorder,
-            width: isSelected ? 2 : 1,
+            color: AppColors.sequencerBorder.withOpacity(0.55),
+            width: 1,
           ),
-          boxShadow: isSelected ? null : [
+          boxShadow: [
             BoxShadow(
-              color: AppColors.sequencerShadow,
-              blurRadius: 1,
-              offset: const Offset(0, 0.5),
+              color: Colors.black.withOpacity(0.5),
+              blurRadius: 4,
+              offset: const Offset(0, 2),
             ),
           ],
         ),
-        child: Center(
-          child: Text(
-            '${sectionIndex + 1}',
-            style: GoogleFonts.sourceSans3(
-              color: isPlaying
-                  ? AppColors.sequencerAccent
-                  : (isUiSelected 
-                      ? AppColors.sequencerText // Dark text on light background
-                      : AppColors.sequencerLightText),
-              fontSize: fontSize,
-              fontWeight: FontWeight.w600,
+        padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 3),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOut,
+          width: double.infinity,
+          height: double.infinity,
+          decoration: BoxDecoration(
+            color: apertureColor,
+            borderRadius: BorderRadius.circular(3),
+            border: Border.all(
+              color: isSelected
+                  ? AppColors.sequencerSelectionBorder
+                  : AppColors.sequencerBorder.withOpacity(0.7),
+              width: isSelected ? 2.5 : 1,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.35),
+                blurRadius: 0,
+                offset: const Offset(0, 1),
+              ),
+            ],
+          ),
+          child: Center(
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text(
+                '${sectionIndex + 1}',
+                style: GoogleFonts.sourceSans3(
+                  color: numberColor,
+                  fontSize: fontSize,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: -0.5,
+                ),
+              ),
             ),
           ),
         ),
@@ -223,11 +279,23 @@ class SectionManagementWidget extends StatelessWidget {
         width: width,
         height: height,
         margin: const EdgeInsets.symmetric(horizontal: 1),
+        decoration: BoxDecoration(
+          color: _filmBase,
+          borderRadius: BorderRadius.circular(5),
+          border: Border.all(
+            color: AppColors.sequencerBorder.withOpacity(0.45),
+            width: 1,
+          ),
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 3),
         child: Center(
-          child: Icon(
-            Icons.add,
-            color: AppColors.sequencerLightText.withOpacity(0.5),
-            size: height * 0.3,
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Icon(
+              Icons.add_rounded,
+              color: AppColors.sequencerLightText.withOpacity(0.72),
+              size: (height * 0.34).clamp(14.0, 24.0),
+            ),
           ),
         ),
       ),
@@ -240,21 +308,20 @@ class SectionManagementWidget extends StatelessWidget {
     PlaybackState playbackState,
     UiSelectionState uiSelection,
   ) {
-    // Select the section (this will clear other selections via UiSelectionState)
     uiSelection.selectSection(index);
-    
-    // Switch sequencer view to this section
     tableState.setUiSelectedSection(index);
-    
-    // Switch playback to this section
     playbackState.switchToSection(index);
   }
 
-  void _onGapTap(int gapIndex, TableState tableState, UiSelectionState uiSelection, PlaybackState playbackState) {
+  void _onGapTap(
+    int gapIndex,
+    TableState tableState,
+    UiSelectionState uiSelection,
+    PlaybackState playbackState,
+  ) {
     tableState.addSectionAfter(gapIndex);
     final newIndex = gapIndex + 1;
     uiSelection.selectSection(newIndex);
     playbackState.switchToSection(newIndex);
   }
 }
-

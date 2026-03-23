@@ -83,10 +83,11 @@ class _NativeTableState {
 /// efficient change tracking using ValueNotifiers for UI updates.
 enum SoundGridViewMode { stack, flat }
 enum EditButtonsLayoutMode { v1, v2 }
+enum LayerMode { sequence, rec }
 
 class TableState extends ChangeNotifier {
   static const int defaultSectionSteps = 16;
-  static const int maxLayersPerSection = 4;
+  static const int maxLayersPerSection = 5;
   static const int maxColsPerLayer = 4;
   static const int maxSections = 64;
   
@@ -120,6 +121,23 @@ class TableState extends ChangeNotifier {
   SoundGridViewMode _uiSoundGridViewMode = SoundGridViewMode.flat;
   // UI: edit buttons layout mode (v1 classic, v2 right-aligned large)
   EditButtonsLayoutMode _uiEditButtonsLayoutMode = EditButtonsLayoutMode.v2;
+  // Layer operational mode (sequencer vs live recording)
+  LayerMode _layerMode = LayerMode.sequence;
+  final ValueNotifier<LayerMode> layerModeNotifier = ValueNotifier<LayerMode>(LayerMode.sequence);
+  
+  // Per-layer operational mode persistence (SEQUENCE or REC)
+  final Map<int, LayerMode> _layerModes = {};
+  
+  // Per-layer mute/solo (synced to native via FFI)
+  final Map<int, bool> _layerMuted = {};
+  final Map<int, bool> _layerSoloed = {};
+  final ValueNotifier<void> layerMuteSoloNotifier = ValueNotifier<void>(null);
+  // Per-column mute/solo:
+  // - mute is per (layer, colInLayer)
+  // - solo is per (layer, colInLayer)
+  final Map<int, bool> _layerColumnMuted = {};
+  final Map<int, bool> _layerColumnSoloed = {};
+  final ValueNotifier<void> columnMuteSoloNotifier = ValueNotifier<void>(null);
   
   // Sound grid stack (multiple grids)
   int _uiCurrentSoundGridIndex = 0;
@@ -162,8 +180,13 @@ class TableState extends ChangeNotifier {
       _uiSelectedLayer = layer;
       uiSelectedLayerNotifier.value = layer; // Update ValueNotifier for reliable UI updates
       
+      // Update layer mode notifier to reflect the newly selected layer's mode
+      final layerMode = getLayerMode(layer);
+      _layerMode = layerMode;
+      layerModeNotifier.value = layerMode;
+      
       if (oldLayer != layer) {
-        debugPrint('🎨 [TABLE_STATE] ✅ Switched UI layer from $oldLayer to $layer / totalLayers=$layers');
+        debugPrint('🎨 [TABLE_STATE] ✅ Switched UI layer from $oldLayer to $layer / totalLayers=$layers (mode: $layerMode)');
       } else {
         debugPrint('🎨 [TABLE_STATE] Layer $layer reselected (forcing UI update)');
       }
@@ -190,6 +213,220 @@ class TableState extends ChangeNotifier {
     _uiEditButtonsLayoutMode = mode;
     notifyListeners();
     debugPrint('🎚️ [TABLE_STATE] Set UI edit buttons layout mode to $mode');
+  }
+
+  /// Get layer mode for specific layer (returns default if not set)
+  LayerMode getLayerMode(int layer) {
+    return _layerModes[layer] ?? LayerMode.sequence;
+  }
+  
+  /// Set layer mode for specific layer (persisted per layer)
+  void setLayerMode(int layer, LayerMode mode) {
+    final oldMode = _layerModes[layer];
+    _layerModes[layer] = mode;
+    
+    // Only update global notifier if this is the currently selected layer
+    if (layer == _uiSelectedLayer) {
+      _layerMode = mode;
+      layerModeNotifier.value = mode;
+    }
+    
+    // Only notify if mode actually changed
+    if (oldMode != mode) {
+      notifyListeners();
+      debugPrint('📒 [TABLE_STATE] Set layer $layer mode to $mode');
+    }
+  }
+  
+  /// Reset all layer modes to sequence (called when creating new pattern)
+  void resetAllLayerModes() {
+    _layerModes.clear();
+    _layerMode = LayerMode.sequence;
+    layerModeNotifier.value = LayerMode.sequence;
+    notifyListeners();
+    debugPrint('📒 [TABLE_STATE] Reset all layer modes to sequence');
+  }
+
+  /// Get layer muted state
+  bool isLayerMuted(int layer) => _layerMuted[layer] ?? false;
+
+  /// Get layer soloed state
+  bool isLayerSoloed(int layer) => _layerSoloed[layer] ?? false;
+
+  int _layerColKey(int layer, int colInLayer) => (layer * maxColsPerLayer) + colInLayer;
+
+  /// Get per-layer column muted state.
+  bool isLayerColumnMuted(int layer, int colInLayer) {
+    if (layer < 0 || layer >= maxLayersPerSection) return false;
+    if (colInLayer < 0 || colInLayer >= maxColsPerLayer) return false;
+    return _layerColumnMuted[_layerColKey(layer, colInLayer)] ?? false;
+  }
+
+  /// Get per-layer column soloed state.
+  bool isLayerColumnSoloed(int layer, int colInLayer) {
+    if (layer < 0 || layer >= maxLayersPerSection) return false;
+    if (colInLayer < 0 || colInLayer >= maxColsPerLayer) return false;
+    return _layerColumnSoloed[_layerColKey(layer, colInLayer)] ?? false;
+  }
+
+  void _setAllColumnsMutedForLayer(int layer, bool muted) {
+    for (int c = 0; c < maxColsPerLayer; c++) {
+      final key = _layerColKey(layer, c);
+      _layerColumnMuted[key] = muted;
+      _table_ffi.tableSetLayerColMute(layer, c, muted ? 1 : 0);
+    }
+  }
+
+  void _setAllColumnsSoloedForLayer(int layer, bool soloed) {
+    for (int c = 0; c < maxColsPerLayer; c++) {
+      final key = _layerColKey(layer, c);
+      _layerColumnSoloed[key] = soloed;
+      _table_ffi.tableSetLayerColSolo(layer, c, soloed ? 1 : 0);
+    }
+  }
+
+  /// Set layer muted (syncs to native)
+  void setLayerMuted(int layer, bool muted) {
+    if (layer < 0 || layer >= maxLayersPerSection) return;
+    final wasMuted = _layerMuted[layer] ?? false;
+    final wasSoloed = _layerSoloed[layer] ?? false;
+    if (wasMuted == muted) return;
+
+    // Mute/Solo are exclusive per layer: enabling mute disables solo.
+    if (muted && wasSoloed) {
+      _layerSoloed[layer] = false;
+      _table_ffi.tableSetLayerSolo(layer, 0);
+    }
+    // Layer mute: no column solos (mute + solo must never show together for this layer).
+    if (muted) {
+      _setAllColumnsSoloedForLayer(layer, false);
+    }
+    _layerMuted[layer] = muted;
+    _table_ffi.tableSetLayerMute(layer, muted ? 1 : 0);
+    // Layer mute state propagates to all columns in this layer.
+    _setAllColumnsMutedForLayer(layer, muted);
+
+    // Rebuild all section patterns so mute/solo changes are audible immediately.
+    syncAllSectionsToSunVox();
+    layerMuteSoloNotifier.value = null;
+    // Layer mute mirrors to every column — widgets keyed on columnMuteSoloNotifier must rebuild.
+    columnMuteSoloNotifier.value = null;
+    notifyListeners();
+  }
+
+  /// Set layer soloed (syncs to native)
+  void setLayerSoloed(int layer, bool soloed) {
+    if (layer < 0 || layer >= maxLayersPerSection) return;
+    final wasSoloed = _layerSoloed[layer] ?? false;
+    final wasMuted = _layerMuted[layer] ?? false;
+    if (wasSoloed == soloed) return;
+
+    // Mute/Solo are exclusive per layer: enabling solo disables mute.
+    if (soloed && wasMuted) {
+      _layerMuted[layer] = false;
+      _table_ffi.tableSetLayerMute(layer, 0);
+      _setAllColumnsMutedForLayer(layer, false);
+    }
+    _layerSoloed[layer] = soloed;
+    _table_ffi.tableSetLayerSolo(layer, soloed ? 1 : 0);
+    // Layer solo state propagates to all columns in this layer.
+    _setAllColumnsSoloedForLayer(layer, soloed);
+
+    // Rebuild all section patterns so mute/solo changes are audible immediately.
+    syncAllSectionsToSunVox();
+    layerMuteSoloNotifier.value = null;
+    // Layer solo mirrors to every column — widgets keyed on columnMuteSoloNotifier must rebuild.
+    columnMuteSoloNotifier.value = null;
+    notifyListeners();
+  }
+
+  /// Clear all layer mute/solo (e.g. before snapshot import)
+  void clearAllLayerMuteSolo() {
+    for (int l = 0; l < maxLayersPerSection; l++) {
+      _layerMuted[l] = false;
+      _layerSoloed[l] = false;
+      _table_ffi.tableSetLayerMute(l, 0);
+      _table_ffi.tableSetLayerSolo(l, 0);
+    }
+    // Also reset per-column mute/solo state so imported snapshots always start clean.
+    clearAllColumnMuteSolo(syncSunvox: false, notify: false);
+    layerMuteSoloNotifier.value = null;
+    columnMuteSoloNotifier.value = null;
+    notifyListeners();
+  }
+
+  /// Set per-layer column muted (syncs to native)
+  void setLayerColumnMuted(int layer, int colInLayer, bool muted) {
+    if (layer < 0 || layer >= maxLayersPerSection) return;
+    if (colInLayer < 0 || colInLayer >= maxColsPerLayer) return;
+
+    final key = _layerColKey(layer, colInLayer);
+    final wasMuted = _layerColumnMuted[key] ?? false;
+    final wasSoloed = _layerColumnSoloed[key] ?? false;
+    if (wasMuted == muted && (!muted || !wasSoloed)) return;
+
+    // Mute/Solo are exclusive for the same visible column control.
+    if (muted && wasSoloed) {
+      _layerColumnSoloed[key] = false;
+      _table_ffi.tableSetLayerColSolo(layer, colInLayer, 0);
+    }
+
+    _layerColumnMuted[key] = muted;
+    _table_ffi.tableSetLayerColMute(layer, colInLayer, muted ? 1 : 0);
+
+    syncAllSectionsToSunVox();
+    columnMuteSoloNotifier.value = null;
+    notifyListeners();
+  }
+
+  /// Set per-layer column solo (syncs to native)
+  void setLayerColumnSoloed(int layer, int colInLayer, bool soloed) {
+    if (layer < 0 || layer >= maxLayersPerSection) return;
+    if (colInLayer < 0 || colInLayer >= maxColsPerLayer) return;
+
+    // While the layer is muted, column solo is disabled (no M+S on together).
+    if (soloed && (_layerMuted[layer] ?? false)) {
+      return;
+    }
+
+    final key = _layerColKey(layer, colInLayer);
+    final wasSoloed = _layerColumnSoloed[key] ?? false;
+    final wasMuted = _layerColumnMuted[key] ?? false;
+    if (wasSoloed == soloed && (!soloed || !wasMuted)) return;
+
+    // Mute/Solo are exclusive for the same visible column control.
+    if (soloed && wasMuted) {
+      _layerColumnMuted[key] = false;
+      _table_ffi.tableSetLayerColMute(layer, colInLayer, 0);
+    }
+
+    _layerColumnSoloed[key] = soloed;
+    _table_ffi.tableSetLayerColSolo(layer, colInLayer, soloed ? 1 : 0);
+
+    syncAllSectionsToSunVox();
+    columnMuteSoloNotifier.value = null;
+    notifyListeners();
+  }
+
+  /// Clear all per-column mute/solo states.
+  void clearAllColumnMuteSolo({bool syncSunvox = true, bool notify = true}) {
+    for (int l = 0; l < maxLayersPerSection; l++) {
+      for (int c = 0; c < maxColsPerLayer; c++) {
+        final key = _layerColKey(l, c);
+        _layerColumnMuted[key] = false;
+        _layerColumnSoloed[key] = false;
+        _table_ffi.tableSetLayerColMute(l, c, 0);
+        _table_ffi.tableSetLayerColSolo(l, c, 0);
+      }
+    }
+
+    if (syncSunvox) {
+      syncAllSectionsToSunVox();
+    }
+    if (notify) {
+      columnMuteSoloNotifier.value = null;
+      notifyListeners();
+    }
   }
 
   // Removed: setUiColsPerLayer; using native layers config
@@ -263,6 +500,15 @@ class TableState extends ChangeNotifier {
     
     _table_ffi.tableSetCell(step, col, current.sample_slot, nextVolume, nextPitch, undoRecord ? 1 : 0);
     debugPrint('🎚️ [TABLE_STATE] Set cell settings [$step, $col]: vol=${nextVolume.toStringAsFixed(2)}, pitch=${nextPitch.toStringAsFixed(2)}');
+  }
+
+  /// Apply same volume/pitch to multiple cells. Records a single undo step for the batch.
+  void setCellSettingsForCells(List<({int step, int col})> cells, {double? volume, double? pitch, bool undoRecord = true}) {
+    if (cells.isEmpty) return;
+    for (var i = 0; i < cells.length; i++) {
+      final c = cells[i];
+      setCellSettings(c.step, c.col, volume: volume, pitch: pitch, undoRecord: undoRecord && i == cells.length - 1);
+    }
   }
 
   void insertStep(int sectionIndex, int atStep, {bool undoRecord = true}) {
@@ -567,6 +813,7 @@ class TableState extends ChangeNotifier {
   bool get initialized => _initialized;
   SoundGridViewMode get uiSoundGridViewMode => _uiSoundGridViewMode;
   EditButtonsLayoutMode get uiEditButtonsLayoutMode => _uiEditButtonsLayoutMode;
+  LayerMode get layerMode => _layerMode;
 
   /// Get layers-per-section count including empty layers (length = sectionsCount)
   List<int> getLayersLengthPerSection() {
@@ -630,6 +877,25 @@ class TableState extends ChangeNotifier {
     final start = getLayerStartCol(layer);
     final end = getLayerEndCol(layer);
     return List.generate(end - start, (i) => start + i);
+  }
+
+  /// Find first free column in the target layer at a given step.
+  /// Returns layer start column as fallback when all visible cols are occupied.
+  int findFirstFreeColInLayerAtStep(int step, [int? layer]) {
+    final cols = getVisibleCols(layer);
+    if (cols.isEmpty) {
+      return getLayerStartCol(layer);
+    }
+
+    for (final col in cols) {
+      final cellPtr = getCellPointer(step, col);
+      if (cellPtr.address == 0) continue;
+      if (cellPtr.ref.sample_slot < 0) {
+        return col;
+      }
+    }
+
+    return cols.first;
   }
 
   // Derived UI info
@@ -799,6 +1065,9 @@ class TableState extends ChangeNotifier {
     }
     
     uiSelectedLayerNotifier.dispose();
+    layerModeNotifier.dispose();
+    layerMuteSoloNotifier.dispose();
+    columnMuteSoloNotifier.dispose();
     
     super.dispose();
   }

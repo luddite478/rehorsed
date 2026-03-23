@@ -33,6 +33,7 @@ class _NativeSampleBankState {
 /// Flutter only maintains UI helpers and ValueNotifiers for reactive updates.
 class SampleBankState extends ChangeNotifier {
   static const int maxSampleSlots = 26; // A-Z (0-25)
+  static const int _lastDedicatedUserSlot = 24; // Keep Z(25) for preview/recording paths
   
   final SampleBankBindings _sample_bank_ffi;
   
@@ -53,6 +54,8 @@ class SampleBankState extends ChangeNotifier {
   final List<String?> _slotNames = List.filled(maxSampleSlots, null);
   final List<String?> _slotPaths = List.filled(maxSampleSlots, null);
   final List<Color?> _sampleColors = List.filled(maxSampleSlots, null); // Project-specific colors
+  // Sample offsets (in frames at 48kHz) - managed by Flutter, synced to native via pattern updates
+  final List<int> _sampleOffsets = List.filled(maxSampleSlots, 0);
   int _activeSlot = 0;
   
   // ValueNotifiers for UI binding
@@ -83,6 +86,67 @@ class SampleBankState extends ChangeNotifier {
   /// Load sample into a slot by manifest ID (required).
   Future<bool> loadSample(int slot, String sampleId) async {
     return _loadSampleByManifestId(slot, sampleId);
+  }
+
+  /// Load recorded audio from file path (not asset)
+  /// 
+  /// This method loads audio files directly from the filesystem (e.g., recorded WAV files)
+  /// rather than from Flutter assets. Used for loading microphone recordings into samples.
+  Future<bool> loadRecordedAudio(int slot, String filePath, {String? displayName}) async {
+    if (slot < 0 || slot >= maxSampleSlots) {
+      Log.d('❌ [SAMPLE_BANK_STATE] Invalid slot: $slot');
+      return false;
+    }
+    
+    try {
+      Log.d('🎙️ [SAMPLE_BANK_STATE] Loading recorded audio into slot $slot: $filePath');
+      
+      // Check if file exists
+      final file = File(filePath);
+      if (!await file.exists()) {
+        Log.d('❌ [SAMPLE_BANK_STATE] File does not exist: $filePath');
+        return false;
+      }
+      
+      // Convert file path to native C string
+      final pathBytes = utf8.encode(filePath);
+      final pathPtr = calloc<ffi.Char>(pathBytes.length + 1);
+      for (int i = 0; i < pathBytes.length; i++) {
+        pathPtr[i] = pathBytes[i];
+      }
+      pathPtr[pathBytes.length] = 0;
+      
+      // Use special ID for recorded audio with timestamp
+      final sampleId = 'recording_${DateTime.now().millisecondsSinceEpoch}';
+      final idBytes = utf8.encode(sampleId);
+      final idPtr = calloc<ffi.Char>(idBytes.length + 1);
+      for (int i = 0; i < idBytes.length; i++) {
+        idPtr[i] = idBytes[i];
+      }
+      idPtr[idBytes.length] = 0;
+      
+      final result = _sample_bank_ffi.sampleBankLoadWithId(slot, pathPtr, idPtr);
+      
+      calloc.free(pathPtr);
+      calloc.free(idPtr);
+      
+      if (result == 0) {
+        _slotNames[slot] = displayName ?? 'Recorded Audio';
+        _slotPaths[slot] = filePath;
+        _sampleColors[slot] = const Color(0xFFE57373); // Red for recordings
+        
+        Log.d('✅ [SAMPLE_BANK_STATE] Loaded recorded audio into slot $slot');
+        syncSampleBankState();
+        notifyListeners();
+        return true;
+      } else {
+        Log.d('❌ [SAMPLE_BANK_STATE] Failed to load recorded audio: $result');
+        return false;
+      }
+    } catch (e) {
+      Log.d('❌ [SAMPLE_BANK_STATE] Error loading recorded audio: $e');
+      return false;
+    }
   }
 
   /// Load sample from asset path into slot with a stable sampleId (internal)
@@ -250,6 +314,28 @@ class SampleBankState extends ChangeNotifier {
   ffi.Pointer<NativeSampleBankState> getSampleBankStatePtr() {
     return _sample_bank_ffi.sampleBankGetStatePtr();
   }
+
+  /// Simple dedicated-slot resolver for grid-cell sample selection.
+  /// Reuses a slot if the same sample id is already loaded, otherwise loads
+  /// into the first free user slot (A-Y). Returns null when no slot is available.
+  Future<int?> loadSampleForCell(String sampleId) async {
+    // 1) Reuse already loaded sample id.
+    for (int slot = 0; slot <= _lastDedicatedUserSlot; slot++) {
+      if (!isSlotLoaded(slot)) continue;
+      if (getSampleData(slot).id == sampleId) {
+        return slot;
+      }
+    }
+
+    // 2) Load into first empty user slot.
+    for (int slot = 0; slot <= _lastDedicatedUserSlot; slot++) {
+      if (isSlotLoaded(slot)) continue;
+      final ok = await loadSample(slot, sampleId);
+      return ok ? slot : null;
+    }
+
+    return null;
+  }
   
   SampleData getSampleData(int slot) {
     final ptr = getSamplePointer(slot);
@@ -279,6 +365,28 @@ class SampleBankState extends ChangeNotifier {
     _sampleVolumeNotifiers[slot]?.value = v;
     _samplePitchNotifiers[slot]?.value = p;
     Log.d('🎚️ [SAMPLE_BANK_STATE] Set sample settings slot=$slot vol=${volume?.toStringAsFixed(2)} pitch=${pitch?.toStringAsFixed(2)}');
+  }
+
+  /// Set offset for sample slot (in frames)
+  void setSampleOffset(int slot, int offsetFrames) {
+    if (slot >= 0 && slot < maxSampleSlots) {
+      _sampleOffsets[slot] = offsetFrames.clamp(0, 16777215);
+      
+      // TODO: Resync all cells using this sample
+      // This would require calling sunvox_wrapper_sync_cell for each cell
+      // For now, offset changes will be reflected on next pattern sync
+      
+      notifyListeners();
+      Log.d('🎯 [SAMPLE_BANK_STATE] Set sample offset slot=$slot frames=$offsetFrames');
+    }
+  }
+
+  /// Get offset for sample slot (in frames)
+  int getSampleOffset(int slot) {
+    if (slot >= 0 && slot < maxSampleSlots) {
+      return _sampleOffsets[slot];
+    }
+    return 0;
   }
   
   // Getters (state comes from native, metadata from local)

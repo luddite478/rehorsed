@@ -122,6 +122,25 @@ class PlaybackBindings {
     // Enhanced playback logging
     _playbackSetEnhancedLoggingPtr = lib.lookup<ffi.NativeFunction<ffi.Void Function(ffi.Int32)>>('playback_set_enhanced_logging');
     playbackSetEnhancedLogging = _playbackSetEnhancedLoggingPtr.asFunction<void Function(int)>();
+
+    // NOTE: sv_audio_callback2 bypass and Input module ID functions removed
+    // Mic recording now bypasses SunVox entirely
+
+    // SunVox waveform scope (wrapper)
+    _svGetModuleScope2Ptr = lib.lookup<ffi.NativeFunction<ffi.Uint32 Function(ffi.Int32, ffi.Int32, ffi.Int32, ffi.Pointer<ffi.Int16>, ffi.Uint32)>>('sunvox_wrapper_get_module_scope2');
+    svGetModuleScope2 = _svGetModuleScope2Ptr.asFunction<int Function(int, int, int, ffi.Pointer<ffi.Int16>, int)>();
+
+    // Get waveform samples from WAV file
+    _getWaveformSamplesPtr = lib.lookup<ffi.NativeFunction<ffi.Int32 Function(ffi.Pointer<ffi.Char>, ffi.Pointer<ffi.Int16>, ffi.Int32, ffi.Int32)>>('recording_get_waveform_samples');
+    getWaveformSamples = _getWaveformSamplesPtr.asFunction<int Function(ffi.Pointer<ffi.Char>, ffi.Pointer<ffi.Int16>, int, int)>();
+
+    // Set pattern event with offset (for precise sample positioning)
+    _setPatternEventWithOffsetPtr = lib.lookup<ffi.NativeFunction<ffi.Void Function(
+      ffi.Int32, ffi.Int32, ffi.Int32, ffi.Int32, ffi.Int32, ffi.Int32, ffi.Int32
+    )>>('sunvox_wrapper_set_pattern_event_with_offset');
+    setPatternEventWithOffset = _setPatternEventWithOffsetPtr.asFunction<void Function(
+      int, int, int, int, int, int, int
+    )>();
   }
 
   late final ffi.Pointer<ffi.NativeFunction<ffi.Int32 Function()>> _playbackInitPtr;
@@ -198,6 +217,23 @@ class PlaybackBindings {
   // Enhanced playback logging
   late final ffi.Pointer<ffi.NativeFunction<ffi.Void Function(ffi.Int32)>> _playbackSetEnhancedLoggingPtr;
   late final void Function(int) playbackSetEnhancedLogging;
+
+  // NOTE: sv_audio_callback2 bypass and Input module ID declarations removed
+  // Mic recording now bypasses SunVox entirely
+
+  // SunVox waveform scope
+  late final ffi.Pointer<ffi.NativeFunction<ffi.Uint32 Function(ffi.Int32, ffi.Int32, ffi.Int32, ffi.Pointer<ffi.Int16>, ffi.Uint32)>> _svGetModuleScope2Ptr;
+  late final int Function(int, int, int, ffi.Pointer<ffi.Int16>, int) svGetModuleScope2;
+
+  // Get waveform samples from WAV file
+  late final ffi.Pointer<ffi.NativeFunction<ffi.Int32 Function(ffi.Pointer<ffi.Char>, ffi.Pointer<ffi.Int16>, ffi.Int32, ffi.Int32)>> _getWaveformSamplesPtr;
+  late final int Function(ffi.Pointer<ffi.Char>, ffi.Pointer<ffi.Int16>, int, int) getWaveformSamples;
+
+  // Set pattern event with offset
+  late final ffi.Pointer<ffi.NativeFunction<ffi.Void Function(
+    ffi.Int32, ffi.Int32, ffi.Int32, ffi.Int32, ffi.Int32, ffi.Int32, ffi.Int32
+  )>> _setPatternEventWithOffsetPtr;
+  late final void Function(int, int, int, int, int, int, int) setPatternEventWithOffset;
 }
 
 

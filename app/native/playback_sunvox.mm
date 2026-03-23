@@ -14,11 +14,18 @@
 #define SUNVOX_STATIC_LIB
 #include "sunvox.h"
 
+#ifdef __APPLE__
+#import <AVFoundation/AVFoundation.h>
+#endif
+
 // Include miniaudio for audio device (header only, NO implementation - that's in miniaudio_impl.mm)
 #include "miniaudio/miniaudio.h"
 
 // Include recording module
 #include "recording.h"
+
+// Include microphone input
+#include "microphone_input.h"
 
 // Platform-specific includes and logging
 #ifdef __APPLE__
@@ -34,6 +41,9 @@
     #undef LOG_TAG
     #define LOG_TAG "PLAYBACK"
 #endif
+
+// SunVox slot number (same as in sunvox_wrapper.mm)
+#define SUNVOX_SLOT 0
 
 // Playback state
 static int g_initialized = 0;
@@ -59,15 +69,15 @@ static inline void state_update_prefix() {
 }
 
 // Audio callback - called by miniaudio device to fill output buffer
-// This is the ONLY place where sv_audio_callback() is called - no double consumption!
+// SIMPLIFIED: Mic is captured separately, not routed through SunVox
 static void audio_callback(ma_device* device, void* output, const void* input, ma_uint32 frameCount) {
     (void)device;
     (void)input;
     
     float* pOutput = (float*)output;
     
-    // Get audio from SunVox (single call - this is the magic!)
-    // SunVox is in offline mode, so it only generates audio when we ask for it
+    // SIMPLIFIED: Always use sv_audio_callback - mic stays completely separate from SunVox
+    // This avoids interference/cancellation issues when samples exist before recording starts
     int result = sv_audio_callback(pOutput, frameCount, 0, sv_get_ticks());
     
     if (result < 0) {
@@ -76,12 +86,48 @@ static void audio_callback(ma_device* device, void* output, const void* input, m
         return;
     }
     
-    // If recording is active, write the same buffer to WAV file
-    // This is clean - we record exactly what's being played
-    recording_write_frames_from_callback(pOutput, frameCount);
+    // Recording file path:
+    // - Mic OFF: write pattern playback only.
+    // - Mic ON: write mix (pattern + mic) to file only.
+    // Keep pOutput unchanged to avoid live mic monitoring on speakers.
+    if (recording_is_active()) {
+        if (mic_input_is_active()) {
+            static float mic_buffer[8192]; // Up to 4096 frames stereo
+            static float* mix_buffer = NULL;
+            static ma_uint32 mix_buffer_samples = 0;
+            const ma_uint32 needed_samples = frameCount * 2;
+            const float mic_gain = 1.0f; // Simple v1 mix gain
+
+            if (mix_buffer_samples < needed_samples) {
+                float* new_buffer = (float*)malloc(needed_samples * sizeof(float));
+                if (new_buffer) {
+                    if (mix_buffer) free(mix_buffer);
+                    mix_buffer = new_buffer;
+                    mix_buffer_samples = needed_samples;
+                } else {
+                    // Allocation failure fallback: keep pattern-only recording.
+                    recording_write_frames_from_callback(pOutput, frameCount);
+                    return;
+                }
+            }
+
+            int frames_read = mic_input_read_frames(mic_buffer, frameCount);
+            if (frames_read > 0) {
+                for (ma_uint32 i = 0; i < frameCount; i++) {
+                    const ma_uint32 idx = i * 2;
+                    mix_buffer[idx + 0] = pOutput[idx + 0] + (mic_buffer[idx + 0] * mic_gain);
+                    mix_buffer[idx + 1] = pOutput[idx + 1] + (mic_buffer[idx + 1] * mic_gain);
+                }
+                recording_write_frames_from_callback(mix_buffer, frameCount);
+            } else {
+                recording_write_frames_from_callback(pOutput, frameCount);
+            }
+        } else {
+            recording_write_frames_from_callback(pOutput, frameCount);
+        }
+    }
     
-    // pOutput now contains audio from SunVox
-    // miniaudio will automatically output it to speakers
+    // pOutput contains pattern playback for speakers.
 }
 
 // Polling timer for state sync
@@ -149,6 +195,39 @@ int playback_init(void) {
     }
     
     
+    // Pre-configure iOS audio session BEFORE miniaudio initializes.
+    // Using PlayAndRecord + MixWithOthers from the start ensures that when the
+    // microphone is later enabled, the session category doesn't change and iOS
+    // does not send an interruption event to the miniaudio device (which would
+    // silence SunVox output for the rest of the session).
+#ifdef __APPLE__
+    @autoreleasepool {
+        AVAudioSession* session = [AVAudioSession sharedInstance];
+        NSError* avErr = nil;
+        [session setCategory:AVAudioSessionCategoryPlayAndRecord
+                 withOptions:AVAudioSessionCategoryOptionMixWithOthers |
+                             AVAudioSessionCategoryOptionDefaultToSpeaker
+                       error:&avErr];
+        if (avErr) {
+            prnt("⚠️ [PLAYBACK] Audio session category warning: %s",
+                 [[avErr localizedDescription] UTF8String]);
+            avErr = nil;
+        }
+        [session setPreferredSampleRate:48000.0 error:&avErr];
+        avErr = nil;
+        [session setActive:YES error:&avErr];
+        if (avErr) {
+            prnt("⚠️ [PLAYBACK] Audio session activate warning: %s",
+                 [[avErr localizedDescription] UTF8String]);
+        }
+        prnt("🔎 [PLAYBACK] Session before ma_device_init: category=%s options=0x%lx rate=%.0f",
+             [[session category] UTF8String] ?: "unknown",
+             (unsigned long)[session categoryOptions],
+             [session sampleRate]);
+        prnt("✅ [PLAYBACK] iOS audio session pre-configured: PlayAndRecord + MixWithOthers");
+    }
+#endif
+
     // Initialize audio device
     // This creates the audio output that will call our callback
     ma_device_config deviceConfig = ma_device_config_init(ma_device_type_playback);
@@ -164,6 +243,15 @@ int playback_init(void) {
         sunvox_wrapper_cleanup();
         return -1;
     }
+#ifdef __APPLE__
+    @autoreleasepool {
+        AVAudioSession* session = [AVAudioSession sharedInstance];
+        prnt("🔎 [PLAYBACK] Session after ma_device_init: category=%s options=0x%lx rate=%.0f",
+             [[session category] UTF8String] ?: "unknown",
+             (unsigned long)[session categoryOptions],
+             [session sampleRate]);
+    }
+#endif
     g_audio_device_initialized = 1;
     
     // Start audio device
@@ -179,6 +267,17 @@ int playback_init(void) {
     g_initialized = 1;
     prnt("✅ [PLAYBACK] Playback system initialized (BPM: %d)", g_playback_state.bpm);
     prnt("✅ [PLAYBACK] Audio device started (48kHz, stereo, float32)");
+    
+    // PERFORMANCE OPTIMIZATION: Pre-initialize microphone engine at startup
+    // This eliminates the ~500ms delay on first mic button press
+    // The engine is created but not capturing (no permission needed yet)
+    prnt("🎙️ [PLAYBACK] Pre-initializing microphone engine for instant activation...");
+    int mic_result = mic_input_init();
+    if (mic_result == 0) {
+        prnt("✅ [PLAYBACK] Microphone engine pre-initialized (ready for instant activation)");
+    } else {
+        prnt("⚠️ [PLAYBACK] Microphone pre-initialization failed (code: %d) - will init on first use", mic_result);
+    }
     
     // Seed undo/redo baseline
     UndoRedoManager_record();

@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../../state/sequencer/table.dart';
 import '../../../state/sequencer/sample_bank.dart';
+import '../../../state/sequencer/sample_browser.dart';
 import '../../../state/sequencer/edit.dart';
 import '../../../state/sequencer/playback.dart';
 import '../../../ffi/table_bindings.dart' show CellData;
@@ -13,6 +14,7 @@ import '../../../ffi/table_bindings.dart' show CellData;
 import 'generic_slider.dart';
 import '../../../state/sequencer/slider_overlay.dart';
 import 'wheel_select_widget.dart';
+import 'sample_selection_widget.dart';
 
 
 // Pitch conversion utilities
@@ -195,6 +197,7 @@ class _SoundSettingsWidgetState extends State<SoundSettingsWidget> {
             final _HasDataAndIndex hdi = _resolveHasDataAndIndex(widget.type, tableState, sampleBankState, editState);
             final bool hasData = hdi.hasData;
             final int? currentIndex = hdi.index;
+            final allSimilarCells = hdi.allSimilarCells;
             
             return Container(
               padding: EdgeInsets.all(padding),
@@ -226,7 +229,7 @@ class _SoundSettingsWidgetState extends State<SoundSettingsWidget> {
                     flex: (_headerButtonsHeight * 100).round(),
                     child: LayoutBuilder(
                       builder: (context, headerConstraints) {
-                        return _buildScrollableHeader(headerHeight, labelFontSize, headerConstraints.maxWidth, tableState, sampleBankState, editState, currentIndex);
+                        return _buildScrollableHeader(headerHeight, labelFontSize, headerConstraints.maxWidth, tableState, sampleBankState, editState, currentIndex, allSimilarCells);
                       },
                     ),
                   ),
@@ -240,11 +243,11 @@ class _SoundSettingsWidgetState extends State<SoundSettingsWidget> {
                     child: () {
                       if (widget.type == SettingsType.cell) {
                         return (hasData && currentIndex != null)
-                            ? _buildActiveControl(tableState, sampleBankState, editState, playbackState, currentIndex, contentHeight, padding, labelFontSize)
+                            ? _buildActiveControl(tableState, sampleBankState, editState, playbackState, currentIndex, contentHeight, padding, labelFontSize, allSimilarCells)
                             : const SizedBox.shrink();
                       } else {
                         return (hasData && currentIndex != null)
-                            ? _buildActiveControl(tableState, sampleBankState, editState, playbackState, currentIndex, contentHeight, padding, labelFontSize)
+                            ? _buildActiveControl(tableState, sampleBankState, editState, playbackState, currentIndex, contentHeight, padding, labelFontSize, null)
                             : _buildNoDataMessage(contentHeight, labelFontSize);
                       }
                     }(),
@@ -287,7 +290,107 @@ class _SoundSettingsWidgetState extends State<SoundSettingsWidget> {
     }
   }
 
-  Widget _buildScrollableHeader(double headerHeight, double labelFontSize, double availableWidth, TableState tableState, SampleBankState sampleBankState, EditState editState, int? currentIndex) {
+  Widget _buildContextLabelTile(double headerHeight, double labelFontSize, double availableWidth, TableState tableState, SampleBankState sampleBankState, EditState editState, int? currentIndex, _AllSimilarCells? allSimilarCells) {
+    final tileWidth = availableWidth * 0.25;
+    final tileHeight = headerHeight * 0.7;
+
+    if (widget.type == SettingsType.cell && currentIndex != null) {
+      Color? sampleColor;
+      String labelText;
+      if (allSimilarCells != null) {
+        // Edit-all mode: show "ALL (color)"
+        final slot = allSimilarCells.sampleSlot;
+        if (slot < sampleBankState.uiBankColors.length) {
+          sampleColor = sampleBankState.uiBankColors[slot];
+        }
+        labelText = 'ALL';
+      } else {
+        final visibleCols = tableState.getVisibleCols().length;
+        final row = currentIndex ~/ visibleCols;
+        final col = currentIndex % visibleCols;
+        final sectionStart = tableState.getSectionStartStep(tableState.uiSelectedSection);
+        final layerStart = tableState.getLayerStartCol(tableState.uiSelectedLayer);
+        final step = sectionStart + row;
+        final colAbs = layerStart + col;
+        final cellPtr = tableState.getCellPointer(step, colAbs);
+        final cellData = CellData.fromPointer(cellPtr);
+
+        if (cellData.isNotEmpty && cellData.sampleSlot >= 0) {
+          final slot = cellData.sampleSlot;
+          if (slot < sampleBankState.uiBankColors.length) {
+            sampleColor = sampleBankState.uiBankColors[slot];
+          }
+        }
+        final sampleLetter = (cellData.isNotEmpty && cellData.sampleSlot >= 0)
+            ? String.fromCharCode(65 + cellData.sampleSlot)
+            : null;
+        labelText = sampleLetter != null ? '${row + 1}-${col + 1} $sampleLetter' : '${row + 1}-${col + 1}';
+      }
+
+      final squareSize = (tileHeight * 0.45).clamp(6.0, 14.0);
+
+      return Container(
+        width: tileWidth,
+        height: tileHeight,
+        padding: const EdgeInsets.symmetric(horizontal: 6.0, vertical: 4.0),
+        decoration: BoxDecoration(
+          color: AppColors.sequencerSurfaceBase,
+          borderRadius: BorderRadius.circular(2),
+          border: Border.all(color: AppColors.sequencerBorder, width: 1),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          mainAxisAlignment: MainAxisAlignment.center,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            if (sampleColor != null) ...[
+              Container(
+                width: squareSize,
+                height: squareSize,
+                decoration: BoxDecoration(
+                  color: sampleColor,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const SizedBox(width: 4),
+            ],
+            Text(
+              labelText,
+              style: TextStyle(
+                color: AppColors.sequencerLightText,
+                fontSize: labelFontSize,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Container(
+      width: tileWidth,
+      height: tileHeight,
+      padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 4.0),
+      decoration: BoxDecoration(
+        color: AppColors.sequencerSurfaceBase,
+        borderRadius: BorderRadius.circular(2),
+        border: Border.all(color: AppColors.sequencerBorder, width: 1),
+      ),
+      child: Center(
+        child: Text(
+          _getContextLabel(tableState, sampleBankState, editState, currentIndex),
+          style: TextStyle(
+            color: AppColors.sequencerLightText,
+            fontSize: labelFontSize,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildScrollableHeader(double headerHeight, double labelFontSize, double availableWidth, TableState tableState, SampleBankState sampleBankState, EditState editState, int? currentIndex, _AllSimilarCells? allSimilarCells) {
+    final cellInfo = allSimilarCells != null ? null : _resolveCellSelectionInfo(tableState, currentIndex);
     return Align(
       alignment: Alignment.centerLeft,
       child: SingleChildScrollView(
@@ -300,27 +403,22 @@ class _SoundSettingsWidgetState extends State<SoundSettingsWidget> {
           // Context label tile showing which menu is opened
           Padding(
             padding: const EdgeInsets.only(right: 8.0),
-            child: Container(
-              width: availableWidth * 0.25, // 25% of available width
-              height: headerHeight * 0.7,
-              padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 4.0),
-              decoration: BoxDecoration(
-                color: AppColors.sequencerSurfaceBase,
-                borderRadius: BorderRadius.circular(2),
-                border: Border.all(color: AppColors.sequencerBorder, width: 1),
-              ),
-              child: Center(
-                child: Text(
-                  _getContextLabel(tableState, sampleBankState, editState, currentIndex),
-                  style: TextStyle(
-                    color: AppColors.sequencerLightText,
-                    fontSize: labelFontSize,
-                    fontWeight: FontWeight.w500,
-                  ),
+            child: _buildContextLabelTile(headerHeight, labelFontSize, availableWidth, tableState, sampleBankState, editState, currentIndex, allSimilarCells),
+          ),
+          if (widget.type == SettingsType.cell && (cellInfo != null || allSimilarCells != null))
+            Padding(
+              padding: const EdgeInsets.only(right: 8.0),
+              child: SizedBox(
+                width: 132,
+                child: _buildCellSampleSelectorButton(
+                  headerHeight: headerHeight,
+                  fontSize: labelFontSize,
+                  sampleBankState: sampleBankState,
+                  cellInfo: cellInfo,
+                  allSimilarCells: allSimilarCells,
                 ),
               ),
             ),
-          ),
           // Header buttons from the configuration
           ...widget.headerButtons.map((buttonName) {
             return Padding(
@@ -388,7 +486,7 @@ class _SoundSettingsWidgetState extends State<SoundSettingsWidget> {
     );
   }
 
-  Widget _buildActiveControl(TableState tableState, SampleBankState sampleBankState, EditState editState, PlaybackState playbackState, int index, double height, double padding, double fontSize) {
+  Widget _buildActiveControl(TableState tableState, SampleBankState sampleBankState, EditState editState, PlaybackState playbackState, int index, double height, double padding, double fontSize, _AllSimilarCells? allSimilarCells) {
     // Handle different control types based on current selection and settings type
     if (widget.type == SettingsType.master) {
       return _buildMasterControl(playbackState, _selectedControl, height, padding, fontSize);
@@ -396,9 +494,9 @@ class _SoundSettingsWidgetState extends State<SoundSettingsWidget> {
       // Cell and Sample controls
       switch (_selectedControl) {
         case 'VOL':
-          return _buildVolumeControl(tableState, sampleBankState, editState, index, height, padding, fontSize);
+          return _buildVolumeControl(tableState, sampleBankState, editState, index, height, padding, fontSize, allSimilarCells);
         case 'KEY':
-          return _buildPitchControl(tableState, sampleBankState, editState, index, height, padding, fontSize);
+          return _buildPitchControl(tableState, sampleBankState, editState, index, height, padding, fontSize, allSimilarCells);
         // case 'EQ':
         //   return _buildPlaceholderControl('EQ', 'Equalizer settings', height, padding, fontSize);
         // case 'RVB':
@@ -406,7 +504,7 @@ class _SoundSettingsWidgetState extends State<SoundSettingsWidget> {
         // case 'DLY':
         //   return _buildPlaceholderControl('DLY', 'Delay settings', height, padding, fontSize);
         default:
-          return _buildVolumeControl(tableState, sampleBankState, editState, index, height, padding, fontSize);
+          return _buildVolumeControl(tableState, sampleBankState, editState, index, height, padding, fontSize, allSimilarCells);
       }
     }
   }
@@ -523,7 +621,7 @@ class _SoundSettingsWidgetState extends State<SoundSettingsWidget> {
     );
   }
 
-  Widget _buildVolumeControl(TableState tableState, SampleBankState sampleBankState, EditState editState, int index, double height, double padding, double fontSize) {
+  Widget _buildVolumeControl(TableState tableState, SampleBankState sampleBankState, EditState editState, int index, double height, double padding, double fontSize, _AllSimilarCells? allSimilarCells) {
     // Get info text based on type
     // reserved for future UI text
     // String leftInfo = '';
@@ -626,12 +724,12 @@ class _SoundSettingsWidgetState extends State<SoundSettingsWidget> {
                   contextLabel: 'Sample ${sampleBankState.getSlotLetter(index)}',
                 ),
               )
-            : _buildCellVolumeSlider(tableState, index, height),
+            : _buildCellVolumeSlider(tableState, index, height, allSimilarCells),
       ),
     );
   }
 
-  Widget _buildPitchControl(TableState tableState, SampleBankState sampleBankState, EditState editState, int index, double height, double padding, double fontSize) {
+  Widget _buildPitchControl(TableState tableState, SampleBankState sampleBankState, EditState editState, int index, double height, double padding, double fontSize, _AllSimilarCells? allSimilarCells) {
     return Container(
       padding: EdgeInsets.symmetric(horizontal: padding * 0.3, vertical: padding * 0.05),
       decoration: BoxDecoration(
@@ -695,7 +793,7 @@ class _SoundSettingsWidgetState extends State<SoundSettingsWidget> {
                   );
                 },
               )
-            : _buildCellPitchWheel(tableState, index, height),
+            : _buildCellPitchWheel(tableState, index, height, allSimilarCells),
       ),
     );
   }
@@ -783,6 +881,133 @@ class _SoundSettingsWidgetState extends State<SoundSettingsWidget> {
     );
   }
 
+  _CellSelectionInfo? _resolveCellSelectionInfo(TableState tableState, int? currentIndex) {
+    if (widget.type != SettingsType.cell || currentIndex == null) return null;
+    final visibleCols = tableState.getVisibleCols().length;
+    final row = currentIndex ~/ visibleCols;
+    final col = currentIndex % visibleCols;
+    final sectionStart = tableState.getSectionStartStep(tableState.uiSelectedSection);
+    final layerStart = tableState.getLayerStartCol(tableState.uiSelectedLayer);
+    final step = sectionStart + row;
+    final colAbs = layerStart + col;
+    final cellData = tableState.getCellNotifier(step, colAbs).value;
+    return _CellSelectionInfo(
+      row: row,
+      col: col,
+      step: step,
+      colAbs: colAbs,
+      cellData: cellData,
+    );
+  }
+
+  Widget _buildCellSampleSelectorButton({
+    required double headerHeight,
+    required double fontSize,
+    required SampleBankState sampleBankState,
+    _CellSelectionInfo? cellInfo,
+    _AllSimilarCells? allSimilarCells,
+  }) {
+    final slot = allSimilarCells?.sampleSlot ?? cellInfo?.cellData.sampleSlot ?? -1;
+    final bool hasSample = slot >= 0;
+    String label = 'SELECT SAMPLE';
+    if (hasSample) {
+      final slotName = sampleBankState.getSlotName(slot);
+      label = (slotName != null && slotName.trim().isNotEmpty)
+          ? _formatCellSampleLabel(slotName)
+          : 'SAMPLE ${sampleBankState.getSlotLetter(slot)}';
+    }
+
+    return GestureDetector(
+      onTap: () {
+        final sampleBrowser = context.read<SampleBrowserState>();
+        final sampleBank = context.read<SampleBankState>();
+        final playback = context.read<PlaybackState>();
+        final table = context.read<TableState>();
+
+        // Open browser in the current sample's folder when available.
+        if (hasSample) {
+          final slotPath = sampleBankState.getSlotPath(slot);
+          sampleBrowser.navigateToSamplePath(slotPath);
+        }
+
+        if (allSimilarCells != null) {
+          sampleBrowser.showForSlot(allSimilarCells.sampleSlot);
+        } else if (cellInfo != null) {
+          final bankSlot = cellInfo.cellData.sampleSlot >= 0
+              ? cellInfo.cellData.sampleSlot
+              : sampleBank.activeSlot;
+          sampleBrowser.showForCell(cellInfo.step, cellInfo.colAbs, bankSlot: bankSlot);
+        } else {
+          return;
+        }
+        showDialog(
+          context: context,
+          barrierDismissible: true,
+          barrierColor: Colors.black54,
+          builder: (_) => MultiProvider(
+            providers: [
+              ChangeNotifierProvider.value(value: sampleBrowser),
+              ChangeNotifierProvider.value(value: sampleBank),
+              ChangeNotifierProvider.value(value: playback),
+              ChangeNotifierProvider.value(value: table),
+            ],
+            child: const _CellSampleBrowserDialog(),
+          ),
+        ).then((_) => sampleBrowser.hide());
+      },
+      child: Container(
+        height: headerHeight * 0.7,
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        decoration: BoxDecoration(
+          color: hasSample
+              ? AppColors.sequencerSurfaceRaised
+              : const Color(0xFFD3D3D3), // Light gray highlight for add-sample action
+          borderRadius: BorderRadius.circular(2),
+          border: Border.all(
+            color: hasSample ? AppColors.sequencerBorder : const Color(0xFFBDBDBD),
+            width: 0.5,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: AppColors.sequencerShadow,
+              blurRadius: 1.5,
+              offset: const Offset(0, 1),
+            ),
+            BoxShadow(
+              color: AppColors.sequencerSurfaceRaised,
+              blurRadius: 0.5,
+              offset: const Offset(0, -0.5),
+            ),
+          ],
+        ),
+        child: Center(
+          child: Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: GoogleFonts.sourceSans3(
+              color: hasSample ? AppColors.sequencerText : const Color(0xFF3A3A3A),
+              fontSize: fontSize,
+              fontWeight: FontWeight.w600,
+              letterSpacing: 0.5,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  String _formatCellSampleLabel(String rawName) {
+    final trimmed = rawName.trim();
+    if (trimmed.isEmpty) return 'SELECT SAMPLE';
+    final withoutPrefix = trimmed.replaceFirst(
+      RegExp(r'^_?sample[_\-\s]*', caseSensitive: false),
+      '',
+    );
+    final normalized = withoutPrefix.trim();
+    return normalized.isEmpty ? trimmed : normalized;
+  }
+
 
   // Helpers
   static int? _resolveSelectedCell(EditState editState) {
@@ -797,29 +1022,36 @@ class _SoundSettingsWidgetState extends State<SoundSettingsWidget> {
       final has = sampleBankState.isSlotLoaded(idx) || sampleBankState.getSlotName(idx) != null;
       return _HasDataAndIndex(hasData: has, index: idx);
     } else if (type == SettingsType.cell) {
+      final allSimilar = editState.isInSelectionMode ? editState.getSelectedCellsWithSameSample() : null;
+      if (allSimilar != null) {
+        // ALL mode: use the actually selected cell as the reference for the slider display.
+        // allSimilar.selectedStep/selectedCol are the absolute coords of the selected cell,
+        // which is guaranteed to be in the current section/layer.
+        final sectionStart = tableState.getSectionStartStep(tableState.uiSelectedSection);
+        final layerStart = tableState.getLayerStartCol(tableState.uiSelectedLayer);
+        final visibleCols = tableState.getVisibleCols().length;
+        final row = allSimilar.selectedStep - sectionStart;
+        final col = allSimilar.selectedCol - layerStart;
+        final refIndex = row * visibleCols + col;
+        return _HasDataAndIndex(hasData: true, index: refIndex, allSimilarCells: allSimilar);
+      }
       final selectedCell = _resolveSelectedCell(editState);
       if (selectedCell == null) return const _HasDataAndIndex(hasData: false, index: null);
-      final visibleCols = tableState.getVisibleCols().length;
-      final row = selectedCell ~/ visibleCols;
-      final col = selectedCell % visibleCols;
-      final step = tableState.getSectionStartStep(tableState.uiSelectedSection) + row;
-      final colAbs = tableState.getLayerStartCol(tableState.uiSelectedLayer) + col;
-      final cellPtr = tableState.getCellPointer(step, colAbs);
-      final cellData = CellData.fromPointer(cellPtr);
-      return _HasDataAndIndex(hasData: cellData.isNotEmpty, index: selectedCell);
+      return _HasDataAndIndex(hasData: true, index: selectedCell);
     }
     return const _HasDataAndIndex(hasData: true, index: 0);
   }
 
   // Delete action moved to Edit Buttons; keep stub removed.
 
-  Widget _buildCellVolumeSlider(TableState tableState, int selectedCellIndex, double height) {
+  Widget _buildCellVolumeSlider(TableState tableState, int selectedCellIndex, double height, _AllSimilarCells? allSimilarCells) {
     final visibleCols = tableState.getVisibleCols().length;
     final row = selectedCellIndex ~/ visibleCols;
     final col = selectedCellIndex % visibleCols;
     final step = tableState.getSectionStartStep(tableState.uiSelectedSection) + row;
     final colAbs = tableState.getLayerStartCol(tableState.uiSelectedLayer) + col;
     final cellNotifier = tableState.getCellNotifier(step, colAbs);
+    final cellsList = allSimilarCells?.cells ?? [(step: step, col: colAbs)];
     return ValueListenableBuilder<CellData>(
       valueListenable: cellNotifier,
       builder: (context, cell, _) {
@@ -841,7 +1073,7 @@ class _SoundSettingsWidgetState extends State<SoundSettingsWidget> {
             if (cell.isNotEmpty && cell.sampleSlot != -1) {
               _cellVolumeDebounceTimer?.cancel();
               _cellVolumeDebounceTimer = Timer(const Duration(milliseconds: 150), () {
-                tableState.setCellSettings(step, colAbs, volume: value);
+                tableState.setCellSettingsForCells(cellsList, volume: value);
               });
 
               // Live preview: debounce and restart note
@@ -885,19 +1117,20 @@ class _SoundSettingsWidgetState extends State<SoundSettingsWidget> {
             final playback = context.read<PlaybackState>();
             playback.stopPreview();
           },
-          contextLabel: 'Cell ${row + 1}:${col + 1}',
+          contextLabel: allSimilarCells != null ? 'ALL' : 'Cell ${row + 1}:${col + 1}',
         );
       },
     );
   }
 
-  Widget _buildCellPitchWheel(TableState tableState, int selectedCellIndex, double height) {
+  Widget _buildCellPitchWheel(TableState tableState, int selectedCellIndex, double height, _AllSimilarCells? allSimilarCells) {
     final visibleCols = tableState.getVisibleCols().length;
     final row = selectedCellIndex ~/ visibleCols;
     final col = selectedCellIndex % visibleCols;
     final step = tableState.getSectionStartStep(tableState.uiSelectedSection) + row;
     final colAbs = tableState.getLayerStartCol(tableState.uiSelectedLayer) + col;
     final cellNotifier = tableState.getCellNotifier(step, colAbs);
+    final cellsList = allSimilarCells?.cells ?? [(step: step, col: colAbs)];
     return ValueListenableBuilder<CellData>(
       valueListenable: cellNotifier,
       builder: (context, cell, _) {
@@ -920,7 +1153,7 @@ class _SoundSettingsWidgetState extends State<SoundSettingsWidget> {
                 // Debounce cell pitch commit
                 _cellPitchDebounceTimer?.cancel();
                 _cellPitchDebounceTimer = Timer(const Duration(milliseconds: 250), () {
-                  tableState.setCellSettings(step, colAbs, pitch: ratio);
+                  tableState.setCellSettingsForCells(cellsList, pitch: ratio);
                 });
 
                 // Live preview: immediate restart of note with new pitch
@@ -968,8 +1201,99 @@ class _SoundSettingsWidgetState extends State<SoundSettingsWidget> {
   // (watch helpers removed in favor of direct ValueListenableBuilder wiring)
 } 
 
+typedef _AllSimilarCells = ({int sampleSlot, int selectedStep, int selectedCol, List<({int step, int col})> cells});
+
 class _HasDataAndIndex {
   final bool hasData;
   final int? index;
-  const _HasDataAndIndex({required this.hasData, required this.index});
+  /// When set, the selected cell has a sample and SELECT mode is active (edit-all mode).
+  final _AllSimilarCells? allSimilarCells;
+  const _HasDataAndIndex({required this.hasData, this.index, this.allSimilarCells});
+}
+
+class _CellSelectionInfo {
+  final int row;
+  final int col;
+  final int step;
+  final int colAbs;
+  final CellData cellData;
+
+  const _CellSelectionInfo({
+    required this.row,
+    required this.col,
+    required this.step,
+    required this.colAbs,
+    required this.cellData,
+  });
+}
+
+class _CellSampleBrowserDialog extends StatelessWidget {
+  const _CellSampleBrowserDialog();
+
+  static const double _kDialogWidthFactor = 0.88;
+
+  @override
+  Widget build(BuildContext context) {
+    final screenSize = MediaQuery.of(context).size;
+    final dialogWidth = screenSize.width * _kDialogWidthFactor;
+    final maxHeight = (screenSize.height * 0.85).clamp(400.0, 800.0);
+    final sampleBrowser = context.read<SampleBrowserState>();
+
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      insetPadding: EdgeInsets.zero,
+      child: Center(
+        child: Container(
+          width: dialogWidth,
+          height: maxHeight,
+          decoration: BoxDecoration(
+            color: AppColors.sequencerSurfaceRaised,
+            borderRadius: BorderRadius.circular(1.0),
+            border: Border.all(color: AppColors.sequencerBorder, width: 0.5),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                decoration: BoxDecoration(
+                  border: Border(
+                    bottom: BorderSide(color: AppColors.sequencerBorder, width: 0.5),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.library_music, color: AppColors.sequencerAccent, size: 20),
+                    const SizedBox(width: 8),
+                    Text(
+                      'SAMPLES',
+                      style: GoogleFonts.sourceSans3(
+                        color: AppColors.sequencerText,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 1.5,
+                      ),
+                    ),
+                    const Spacer(),
+                    IconButton(
+                      icon: Icon(Icons.close, color: AppColors.sequencerLightText, size: 20),
+                      onPressed: () {
+                        sampleBrowser.hide();
+                        Navigator.of(context).pop();
+                      },
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                    ),
+                  ],
+                ),
+              ),
+              const Expanded(
+                child: SampleSelectionWidget(),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }

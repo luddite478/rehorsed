@@ -47,6 +47,16 @@ post_install do |installer|
       # Ensure system toolchain is used; avoid any ccache wrapper
       config.build_settings['CC'] = '/usr/bin/clang'
       config.build_settings['CXX'] = '/usr/bin/clang++'
+      
+      # Enable microphone permission for permission_handler plugin
+      # This macro is required for the permission_handler_apple plugin to include
+      # the microphone permission handling code. Without it, the permission
+      # request silently fails and iOS won't show the permission dialog or
+      # list the app in Settings > Privacy > Microphone.
+      config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] ||= [
+        '$(inherited)',
+        'PERMISSION_MICROPHONE=1',
+      ]
     end
   end
 end

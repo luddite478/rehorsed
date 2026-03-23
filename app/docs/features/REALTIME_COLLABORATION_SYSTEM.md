@@ -1,6 +1,6 @@
 # Real-Time Collaboration System
 
-Complete guide to WebSocket-based real-time features, data synchronization, and collaborative workflows in Fortuned.
+Complete guide to WebSocket-based real-time features, data synchronization, and collaborative workflows in Rehorsed.
 
 **Last Updated**: Dec 2025  
 **Status**: Production Ready

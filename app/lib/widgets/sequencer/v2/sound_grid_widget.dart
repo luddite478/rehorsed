@@ -7,12 +7,16 @@ import 'dart:math' as math;
 import '../../../state/sequencer/table.dart';
 import '../../../state/sequencer/sample_bank.dart';
 import '../../../state/sequencer/playback.dart';
+import '../../../state/sequencer/recording.dart';
+import '../../../state/sequencer/recording_waveform.dart';
+import '../../../state/sequencer/microphone.dart';
 import '../../../state/sequencer/edit.dart';
 import '../../../state/sequencer/multitask_panel.dart';
 import '../../../ffi/table_bindings.dart';
 import '../../../utils/app_colors.dart';
 import '../../stacked_cards_widget.dart';
 import '../../../state/sequencer/ui_selection.dart';
+import 'line_mic_waveform_widget.dart';
 
 // Custom ScrollPhysics to retain position when content changes
 class PositionRetainedScrollPhysics extends ScrollPhysics {
@@ -82,6 +86,9 @@ class _SampleGridWidgetState extends State<SampleGridWidget> {
   static const double rowSpacingPercent = 0.0; // Spacing between rows as % of available space
   static const double rowNumberColumnWidthPercent = 6.0; // Row number column width as % of total width
   static const Color rowNumberColumnColor = Color.fromARGB(121, 40, 46, 39); // Color for row number column
+  static const Color gridBackgroundColor = AppColors.sequencerCellEmptyAlternate; // Gray background behind grid and buttons
+  static const Color cellBorderColor = Color.fromARGB(255, 77, 77, 77); // Border color for cells
+  static const double cellBorderWidth = 1.0; // Border width for cells
   
   // CONFIGURABLE CONTENT SIZING - Control text and element sizes
   static const double sampleLetterFontSize = 14.0; // Font size for sample letters (A, B, C, etc.)
@@ -197,6 +204,7 @@ class _SampleGridWidgetState extends State<SampleGridWidget> {
         if (cellIndex != null) {
           context.read<UiSelectionState>().selectCells();
           context.read<EditState>().selectCell(cellIndex, extend: true);
+          context.read<MultitaskPanelState>().showCellSettings();
         }
         return;
       } else if (yPosition > containerHeight - _edgeThreshold && _scrollController.hasClients && _scrollController.offset < _scrollController.position.maxScrollExtent) {
@@ -204,6 +212,7 @@ class _SampleGridWidgetState extends State<SampleGridWidget> {
         if (cellIndex != null) {
           context.read<UiSelectionState>().selectCells();
           context.read<EditState>().selectCell(cellIndex, extend: true);
+          context.read<MultitaskPanelState>().showCellSettings();
         }
         return;
       } else {
@@ -214,6 +223,7 @@ class _SampleGridWidgetState extends State<SampleGridWidget> {
     if (cellIndex != null) {
       context.read<UiSelectionState>().selectCells();
       context.read<EditState>().selectCell(cellIndex, extend: true);
+      context.read<MultitaskPanelState>().showCellSettings();
     }
   }
 
@@ -385,6 +395,15 @@ class _SampleGridWidgetState extends State<SampleGridWidget> {
     final gridCols = tableState.getVisibleCols().length;
     final row = index ~/ gridCols;
     final col = index % gridCols;
+    final currentLayer = tableState.uiSelectedLayer;
+    final isLayerMuted = tableState.isLayerMuted(currentLayer);
+    final isColumnMuted = tableState.isLayerColumnMuted(currentLayer, col);
+    final isLayerSoloed = tableState.isLayerSoloed(currentLayer);
+    final isColumnSoloed = tableState.isLayerColumnSoloed(currentLayer, col);
+    final mutedVisual = isLayerMuted || isColumnMuted;
+    // Layer mute suppresses solo highlight; no simultaneous mute + solo for the layer.
+    final soloVisual =
+        !isLayerMuted && (isLayerSoloed || isColumnSoloed);
     
     // Calculate absolute step and column for TableState (respect section override)
     final sectionIndex = widget.sectionIndexOverride ?? tableState.uiSelectedSection;
@@ -450,30 +469,17 @@ class _SampleGridWidgetState extends State<SampleGridWidget> {
                 final edit = Provider.of<EditState>(context, listen: false);
                 if (edit.isInSelectionMode) {
                   if (edit.selectedCells.contains(index)) {
-                    // Tap inside selected area → select single tapped cell
                     edit.selectSingleCell(index);
                   } else {
-                    // Tap outside selected area → clear then select single
                     edit.clearSelection();
                     edit.selectSingleCell(index);
                   }
                 } else {
-                  // Not in selection mode → select single cell
                   edit.selectSingleCell(index);
                 }
                 tableState.uiHandlePadPress(index);
 
-                // Open cell settings only if the tapped cell has a placed sample (always open for filled)
-                final gridColsLocal = tableState.getVisibleCols().length;
-                final rowLocal = index ~/ gridColsLocal;
-                final colLocal = index % gridColsLocal;
-                final sectionIndexLocal = widget.sectionIndexOverride ?? tableState.uiSelectedSection;
-                final absoluteStepLocal = tableState.getSectionStartStep(sectionIndexLocal) + rowLocal;
-                final absoluteColLocal = tableState.getLayerStartCol() + colLocal;
-                final cellDataLocal = tableState.getCellNotifier(absoluteStepLocal, absoluteColLocal).value;
-                if (cellDataLocal.sampleSlot >= 0) {
-                  Provider.of<MultitaskPanelState>(context, listen: false).showCellSettings();
-                }
+                Provider.of<MultitaskPanelState>(context, listen: false).showCellSettings();
               },
               child: ValueListenableBuilder<Set<int>>( 
                 valueListenable: context.read<EditState>().selectedCellsNotifier,
@@ -486,14 +492,14 @@ class _SampleGridWidgetState extends State<SampleGridWidget> {
                   color: isDragHovering 
                       ? AppColors.sequencerAccent.withOpacity(0.8)
                       : cellColor,
-                  borderRadius: BorderRadius.circular(2),
+                  borderRadius: BorderRadius.zero, // Sharp corners
                   border: isSelected 
                       ? Border.all(color: AppColors.sequencerSelectionBorder, width: 2)
                       : isCurrentStep 
                           ? Border.all(color: const Color(0xFF87CEEB), width: 1.5) // Light blue border for current step
                           : isDragHovering
                               ? Border.all(color: AppColors.sequencerAccent, width: 0.75)
-                              : Border.all(color: cellColor, width: 0.5),
+                              : Border.all(color: cellBorderColor, width: cellBorderWidth),
                   boxShadow: isSelected
                       ? null
                       : isCurrentStep
@@ -524,9 +530,29 @@ class _SampleGridWidgetState extends State<SampleGridWidget> {
                     // Increase inner padding slightly to create space for thin selection border
                     final basePadding = math.min(constraints.maxWidth, constraints.maxHeight) * (cellPaddingPercent / 100.0);
                     final actualPadding = basePadding + 1.0;
-                    return Padding(
-                      padding: EdgeInsets.all(actualPadding), // Use percentage-based padding relative to cell size
-                      child: hasPlacedSample ? _buildSampleCellContent(context, tableState, index, placedSample, isActivePad, isCurrentStep, isDragHovering) : _buildEmptyCellContent(),
+                    return Stack(
+                      children: [
+                        Padding(
+                          padding: EdgeInsets.all(actualPadding), // Use percentage-based padding relative to cell size
+                          child: hasPlacedSample ? _buildSampleCellContent(context, tableState, index, placedSample, isActivePad, isCurrentStep, isDragHovering) : _buildEmptyCellContent(),
+                        ),
+                        if (mutedVisual)
+                          Positioned.fill(
+                            child: IgnorePointer(
+                              child: Container(
+                                color: Colors.black.withOpacity(0.26),
+                              ),
+                            ),
+                          ),
+                        if (!mutedVisual && soloVisual)
+                          Positioned.fill(
+                            child: IgnorePointer(
+                              child: Container(
+                                color: const Color(0xFFF4D35E).withOpacity(0.18),
+                              ),
+                            ),
+                          ),
+                      ],
                     );
                   },
                 ),
@@ -551,49 +577,35 @@ class _SampleGridWidgetState extends State<SampleGridWidget> {
           child: ValueListenableBuilder<int>(
             valueListenable: tableState.uiSelectedLayerNotifier,
             builder: (context, selectedLayer, _) {
-              return Row(
-                children: List.generate(numSoundGrids, (i) {
-                  final isActive = selectedLayer == i;
-                  return Expanded(
-                    child: GestureDetector(
-                      onTap: () {
-                        debugPrint('🎨 [SOUND_GRID] Layer tab L${i + 1} tapped, current layer: $selectedLayer');
-                        tableState.setUiSelectedLayer(i);
-                        tableState.uiBringGridToFront(i);
-                        debugPrint('🎨 [SOUND_GRID] After tap, layer should be: $i');
-                      },
-                      child: Container(
-                        margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
-                        decoration: BoxDecoration(
-                          color: isActive ? AppColors.sequencerSurfaceRaised : AppColors.sequencerSurfaceBase,
-                          borderRadius: BorderRadius.circular(2),
-                          border: Border.all(
-                            color: isActive ? AppColors.sequencerAccent : AppColors.sequencerBorder,
-                            width: isActive ? 1.0 : 0.5,
-                          ),
-                          boxShadow: [
-                            BoxShadow(
-                              color: AppColors.sequencerShadow,
-                              blurRadius: isActive ? 2 : 1,
-                              offset: Offset(0, isActive ? 1 : 0.5),
-                            ),
-                          ],
-                        ),
-                        child: Center(
-                          child: Text(
-                            'L${i + 1}',
-                            style: GoogleFonts.sourceSans3(
-                              color: isActive ? AppColors.sequencerText : AppColors.sequencerLightText,
-                              fontSize: 12,
-                              fontWeight: isActive ? FontWeight.bold : FontWeight.w600,
-                              letterSpacing: 1,
-                            ),
+              return ValueListenableBuilder<LayerMode>(
+                valueListenable: tableState.layerModeNotifier,
+                builder: (context, viewMode, __) {
+                  return Row(
+                    children: List.generate(numSoundGrids, (i) {
+                      final isActive = selectedLayer == i;
+                      // Check THIS layer's mode, not the global mode
+                      final layerMode = tableState.getLayerMode(i);
+                      return Expanded(
+                        child: GestureDetector(
+                          onTap: () {
+                            debugPrint('🎨 [SOUND_GRID] Layer tab ${i + 1} tapped, current layer: $selectedLayer');
+                            tableState.setUiSelectedLayer(i);
+                            tableState.uiBringGridToFront(i);
+                            context.read<MultitaskPanelState>().showLayerSettings();
+                            debugPrint('🎨 [SOUND_GRID] After tap, layer should be: $i');
+                          },
+                          child: _LayerTabLabel(
+                            label: '${i + 1}',
+                            isActive: isActive,
+                            showLevel: layerMode == LayerMode.rec,
+                            isMuted: tableState.isLayerMuted(i),
+                            isSoloed: tableState.isLayerSoloed(i),
                           ),
                         ),
-                      ),
-                    ),
+                      );
+                    }),
                   );
-                }),
+                },
               );
             },
           ),
@@ -602,10 +614,18 @@ class _SampleGridWidgetState extends State<SampleGridWidget> {
           child: ValueListenableBuilder<int>(
             valueListenable: tableState.uiSelectedLayerNotifier,
             builder: (context, selectedLayer, _) {
-              // Force grid rebuild when layer changes by using selectedLayer as key
-              return KeyedSubtree(
-                key: ValueKey<int>(selectedLayer),
-                child: _buildGridContent(tableState),
+              return ValueListenableBuilder<LayerMode>(
+                valueListenable: tableState.layerModeNotifier,
+                builder: (context, viewMode, __) {
+                  if (viewMode == LayerMode.rec) {
+                    return _buildLineMicContent(tableState);
+                  }
+                  // Force grid rebuild when layer changes by using selectedLayer as key
+                  return KeyedSubtree(
+                    key: ValueKey<int>(selectedLayer),
+                    child: _buildGridContent(tableState),
+                  );
+                },
               );
             },
           ),
@@ -784,7 +804,7 @@ class _SampleGridWidgetState extends State<SampleGridWidget> {
                 height: actualRowHeight,
                 decoration: BoxDecoration(
                   color: rowNumberColumnColor,
-                  borderRadius: BorderRadius.circular(2),
+                  borderRadius: BorderRadius.zero, // Sharp corners
                 ),
                 child: Center(
                   child: Text(
@@ -841,6 +861,7 @@ class _SampleGridWidgetState extends State<SampleGridWidget> {
             // Bring this grid to front and switch UI-visible layer
             tableState.uiBringGridToFront(gridIndex);
             tableState.setUiSelectedLayer(gridIndex);
+            context.read<MultitaskPanelState>().showLayerSettings();
           },
           child: Container(
             width: tabWidth,
@@ -880,7 +901,7 @@ class _SampleGridWidgetState extends State<SampleGridWidget> {
             ),
             child: Center(
               child: Text(
-                'L${gridIndex + 1}',
+                '${gridIndex + 1}',
                 style: GoogleFonts.sourceSans3(
                   color: isActive 
                       ? AppColors.sequencerText // Light text for active tab
@@ -927,7 +948,7 @@ class _SampleGridWidgetState extends State<SampleGridWidget> {
       ),
       child: Center(
         child: Text(
-          'L${gridIndex + 1}',
+          '${gridIndex + 1}',
           style: TextStyle(
             color: cardColor,
             fontSize: 12,
@@ -1053,10 +1074,18 @@ class _SampleGridWidgetState extends State<SampleGridWidget> {
               child: ValueListenableBuilder<int>(
                 valueListenable: tableState.uiSelectedLayerNotifier,
                 builder: (context, selectedLayer, _) {
-                  // Force grid rebuild when layer changes
-                  return KeyedSubtree(
-                    key: ValueKey<int>(selectedLayer),
-                    child: _buildGridContent(tableState),
+                  return ValueListenableBuilder<LayerMode>(
+                    valueListenable: tableState.layerModeNotifier,
+                    builder: (context, viewMode, __) {
+                      if (viewMode == LayerMode.rec) {
+                        return _buildLineMicContent(tableState);
+                      }
+                      // Force grid rebuild when layer changes
+                      return KeyedSubtree(
+                        key: ValueKey<int>(selectedLayer),
+                        child: _buildGridContent(tableState),
+                      );
+                    },
                   );
                 },
               ),
@@ -1068,53 +1097,173 @@ class _SampleGridWidgetState extends State<SampleGridWidget> {
   }
 
   Widget _buildGridContent(TableState tableState) {
-    return GestureDetector(
-      onPanStart: (details) {
-        _gestureStartPosition = details.localPosition;
-        _gestureMode = GestureMode.undetermined;
-        
-        if (context.read<EditState>().isInSelectionMode) {
-          final rb = context.findRenderObject() as RenderBox?;
-          final width = rb?.size.width ?? MediaQuery.of(context).size.width;
-          final cellIndex = _positionToCellIndex(details.localPosition, width);
-          if (cellIndex != null) {
-            context.read<UiSelectionState>().selectCells();
-            context.read<EditState>().beginDragSelectionAt(cellIndex);
-          }
-        }
-      },
-      onPanUpdate: (details) {
-        _handlePanUpdate(details);
-      },
-      onPanEnd: (details) {
-        _gestureStartPosition = null;
-        _currentPanPosition = null;
-        _gestureMode = GestureMode.undetermined;
-        _stopAutoScroll();
-        
-        // No-op for new selection logic: selection is finalized incrementally
-      },
-      child: ListView.builder(
-        controller: _scrollController,
-        physics: (context.watch<EditState>().isInSelectionMode || _gestureMode == GestureMode.selecting)
-            ? const NeverScrollableScrollPhysics()
-            : const PositionRetainedScrollPhysics(), // Prevents jumping when rows are added/removed
-        itemCount: tableState.getSectionStepCount(widget.sectionIndexOverride ?? tableState.uiSelectedSection) + 1, // +1 for the control buttons at the bottom
-        itemBuilder: (context, index) {
-          if (index < tableState.getSectionStepCount(widget.sectionIndexOverride ?? tableState.uiSelectedSection)) {
-            // Build a row of grid cells
-            return _buildGridRow(context, tableState, index);
-          } else {
-            // Control buttons at the bottom
-            return RepaintBoundary(
-              child: Container(
-                margin: const EdgeInsets.only(left: 16, right: 16, bottom: 60, top: 4),
-                child: _buildGridRowControls(tableState),
-              ),
-            );
+    return Container(
+      color: gridBackgroundColor,
+      child: GestureDetector(
+        onPanStart: (details) {
+          _gestureStartPosition = details.localPosition;
+          _gestureMode = GestureMode.undetermined;
+          
+          if (context.read<EditState>().isInSelectionMode) {
+            final rb = context.findRenderObject() as RenderBox?;
+            final width = rb?.size.width ?? MediaQuery.of(context).size.width;
+            final cellIndex = _positionToCellIndex(details.localPosition, width);
+            if (cellIndex != null) {
+              context.read<UiSelectionState>().selectCells();
+              context.read<EditState>().beginDragSelectionAt(cellIndex);
+            }
           }
         },
+        onPanUpdate: (details) {
+          _handlePanUpdate(details);
+        },
+        onPanEnd: (details) {
+          _gestureStartPosition = null;
+          _currentPanPosition = null;
+          _gestureMode = GestureMode.undetermined;
+          _stopAutoScroll();
+          
+          // No-op for new selection logic: selection is finalized incrementally
+        },
+        child: ListView.builder(
+          controller: _scrollController,
+          physics: (context.watch<EditState>().isInSelectionMode || _gestureMode == GestureMode.selecting)
+              ? const NeverScrollableScrollPhysics()
+              : const PositionRetainedScrollPhysics(parent: ClampingScrollPhysics()), // Prevents jumping when rows are added/removed, no bounce at edges
+          itemCount: tableState.getSectionStepCount(widget.sectionIndexOverride ?? tableState.uiSelectedSection) + 1, // +1 for the control buttons at the bottom
+          itemBuilder: (context, index) {
+            if (index < tableState.getSectionStepCount(widget.sectionIndexOverride ?? tableState.uiSelectedSection)) {
+              // Build a row of grid cells
+              return _buildGridRow(context, tableState, index);
+            } else {
+              // Control buttons at the bottom
+              return RepaintBoundary(
+                child: Container(
+                  margin: const EdgeInsets.only(bottom: 8, top: 4),
+                  child: _buildGridRowControls(tableState),
+                ),
+              );
+            }
+          },
+        ),
       ),
+    );
+  }
+
+  Widget _buildLineMicContent(TableState tableState) {
+    final playbackState = context.watch<PlaybackState>();
+    final recordingState = context.watch<RecordingState>();
+    final waveformState = context.watch<RecordingWaveformState>();
+    final micState = context.watch<MicrophoneState>();
+
+    final int displaySection = (playbackState.songMode && recordingState.isRecording)
+        ? playbackState.currentSection
+        : tableState.uiSelectedSection;
+    final lines = waveformState.getLines(tableState.uiSelectedLayer, displaySection);
+    final loopsNum = playbackState.getSectionLoopsNum(displaySection);
+    final isRecording = recordingState.isRecording && waveformState.activeLayer == tableState.uiSelectedLayer;
+    final shouldCapture = micState.isMicEnabled;
+    final isSongMode = playbackState.songMode;
+
+    waveformState.ensureCapture(
+      enabled: shouldCapture,
+      layer: tableState.uiSelectedLayer,
+      section: displaySection,
+      playbackState: playbackState,
+      tableState: tableState,
+      isActuallyRecording: recordingState.isRecording, // Pass actual record button state
+      levelProvider: micState.getAudioLevel,
+    );
+
+    // Calculate line height similar to grid rows (showing ~5 lines in view)
+    const double baseRowHeight = 50.0;
+    const double lineHeightPercent = 60.0;
+    final double actualLineHeight = baseRowHeight * (lineHeightPercent / 100.0);
+
+    // Determine how many lines to show:
+    // - Loop mode: Show all recorded lines (unlimited iteration)
+    // - Song mode: Show max(recorded lines, loopsNum) to display all data but respect loop limit for playback
+    // - No data: Show loopsNum empty lines as placeholder
+    final bool hasRecordedData = waveformState.hasRecordedData(tableState.uiSelectedLayer, displaySection);
+    final int lineCount = hasRecordedData 
+        ? lines.length  // Show all recorded lines
+        : loopsNum;     // Show placeholder lines if no recording yet
+    
+    // Get current step for position indicator (only show if playing)
+    final bool isPlaying = playbackState.isPlaying;
+    final currentStep = isPlaying ? playbackState.currentStep : null;
+    final totalSteps = tableState.getSectionStepCount(displaySection);
+    
+    // Calculate which line should be playing based on current step position
+    // In loop mode, calculate the loop iteration from step position since engine loop counter is always 0
+    final int? currentLoop;
+    if (isPlaying && hasRecordedData) {
+      if (isSongMode) {
+        // Song mode: use engine loop counter
+        currentLoop = playbackState.currentSectionLoop;
+      } else {
+        // Loop mode: calculate loop from step position
+        final sectionStartStep = tableState.getSectionStartStep(displaySection);
+        final sectionSteps = tableState.getSectionStepCount(displaySection);
+        final stepInSection = currentStep! - sectionStartStep;
+        currentLoop = stepInSection ~/ sectionSteps;  // Integer division
+      }
+      
+      debugPrint('🔄 [LOOP_COUNTER_DEBUG] UI: currentLoop=$currentLoop, lineCount=$lineCount, isSongMode=$isSongMode, currentStep=$currentStep');
+    } else {
+      currentLoop = null;
+    }
+
+    final int currentLayer = tableState.uiSelectedLayer;
+
+    return Stack(
+      children: [
+        Container(
+          padding: const EdgeInsets.all(4),
+          decoration: BoxDecoration(
+            color: gridBackgroundColor,
+            borderRadius: BorderRadius.circular(2),
+            border: Border.all(
+              color: AppColors.sequencerBorder,
+              width: 0.5,
+            ),
+          ),
+          child: ListView.builder(
+            controller: _scrollController,
+            physics: const PositionRetainedScrollPhysics(parent: ClampingScrollPhysics()),
+            itemCount: lineCount,
+            itemBuilder: (context, index) {
+              final samples = hasRecordedData && index < lines.length ? lines[index] : <int>[];
+              final bool isActive = !isSongMode || (index < loopsNum);
+              final int? activeLineIndex = currentLoop != null 
+                  ? (isSongMode 
+                      ? (currentLoop < loopsNum ? currentLoop : null)
+                      : (currentLoop % lineCount))
+                  : null;
+              final int? stepForThisLine = (activeLineIndex == index) ? currentStep : null;
+              return LineMicWaveformWidget(
+                samples: samples,
+                lineIndex: index + 1,
+                loopsNum: loopsNum,
+                isRecording: isRecording,
+                lineHeight: actualLineHeight,
+                currentStep: stepForThisLine,
+                totalSteps: totalSteps,
+                isSongMode: isSongMode,
+                isActive: isActive,
+                waveformState: waveformState,
+                layer: currentLayer,
+                section: displaySection,
+              );
+            },
+          ),
+        ),
+        Positioned(
+          bottom: 12,
+          right: 12,
+          child: _RecLayerRecordButton(layer: currentLayer),
+        ),
+      ],
     );
   }
 
@@ -1164,42 +1313,52 @@ class _SampleGridWidgetState extends State<SampleGridWidget> {
   bool _isIncreasePressed = false;
   
   Widget _buildGridRowControls(TableState tableState) {
-    return Container(
-      height: 30, // Reduced height from 40 to 30
-      margin: const EdgeInsets.symmetric(horizontal: 16), // Full width like grid rows
-      child: Row(
-        children: [
-          // Remove rows button - left half
-          Expanded(
-            child: _buildControlButton(
-              isEnabled: tableState.getSectionStepCount() > 4,
-              onAction: () => _handleDecreaseRows(tableState),
-              icon: Icons.remove,
-              borderRadius: const BorderRadius.only(
-                topLeft: Radius.circular(6),
-                bottomLeft: Radius.circular(6),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final availableWidth = constraints.maxWidth;
+        final actualRowNumberColumnWidth = availableWidth * (rowNumberColumnWidthPercent / 100.0);
+        
+        return Container(
+          height: 30, // Reduced height from 40 to 30
+          margin: EdgeInsets.zero, // Remove margin to match grid width
+          child: Row(
+            children: [
+              // Row number column spacer (to align with grid)
+              Container(
+                width: actualRowNumberColumnWidth,
+                height: 30,
+                decoration: BoxDecoration(
+                  color: gridBackgroundColor,
+                  borderRadius: BorderRadius.zero, // Sharp corners
+                ),
               ),
-              isPressed: _isDecreasePressed,
-              buttonType: 'decrease',
-            ),
-          ),
-          
-          // Add rows button - right half
-          Expanded(
-            child: _buildControlButton(
-              isEnabled: tableState.getSectionStepCount() < tableState.maxSteps,
-              onAction: () => _handleIncreaseRows(tableState),
-              icon: Icons.add,
-              borderRadius: const BorderRadius.only(
-                topRight: Radius.circular(6),
-                bottomRight: Radius.circular(6),
+              // Remove rows button - left half
+              Expanded(
+                child: _buildControlButton(
+                  isEnabled: tableState.getSectionStepCount() > 4,
+                  onAction: () => _handleDecreaseRows(tableState),
+                  icon: Icons.remove,
+                  borderRadius: BorderRadius.zero, // Sharp corners
+                  isPressed: _isDecreasePressed,
+                  buttonType: 'decrease',
+                ),
               ),
-              isPressed: _isIncreasePressed,
-              buttonType: 'increase',
-            ),
+              
+              // Add rows button - right half
+              Expanded(
+                child: _buildControlButton(
+                  isEnabled: tableState.getSectionStepCount() < tableState.maxSteps,
+                  onAction: () => _handleIncreaseRows(tableState),
+                  icon: Icons.add,
+                  borderRadius: BorderRadius.zero, // Sharp corners
+                  isPressed: _isIncreasePressed,
+                  buttonType: 'increase',
+                ),
+              ),
+            ],
           ),
-        ],
-      ),
+        );
+      },
     );
   }
 
@@ -1295,14 +1454,14 @@ class _SampleGridWidgetState extends State<SampleGridWidget> {
 
   Color _getButtonColor(bool isEnabled, bool isPressed) {
     if (!isEnabled) {
-      return AppColors.sequencerCellEmpty.withOpacity(0.3);
+      return gridBackgroundColor.withOpacity(0.3);
     }
     
     if (isPressed) {
-      return AppColors.sequencerSurfacePressed; // Darker when pressed
+      return gridBackgroundColor.withOpacity(0.5); // Darker when pressed
     }
     
-    return AppColors.sequencerCellEmpty; // Normal state
+    return gridBackgroundColor; // Normal state
   }
   
 
@@ -1377,3 +1536,410 @@ class _SampleGridWidgetState extends State<SampleGridWidget> {
     }
   }
 } 
+
+class _LayerTabLabel extends StatefulWidget {
+  final String label;
+  final bool isActive;
+  final bool showLevel;
+  final bool isMuted;
+  final bool isSoloed;
+
+  const _LayerTabLabel({
+    required this.label,
+    required this.isActive,
+    required this.showLevel,
+    this.isMuted = false,
+    this.isSoloed = false,
+  });
+
+  @override
+  State<_LayerTabLabel> createState() => _LayerTabLabelState();
+}
+
+class _LayerTabLabelState extends State<_LayerTabLabel> with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+  double _currentLevel = 0.0;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      duration: const Duration(milliseconds: 80),
+      vsync: this,
+    );
+    if (widget.showLevel) {
+      _startPolling();
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant _LayerTabLabel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.showLevel && !oldWidget.showLevel) {
+      _startPolling();
+    } else if (!widget.showLevel && oldWidget.showLevel) {
+      _controller.stop();
+      setState(() {
+        _currentLevel = 0.0;
+      });
+    }
+  }
+
+  void _startPolling() {
+    _controller.repeat();
+    _controller.addListener(_pollLevel);
+  }
+
+  void _pollLevel() {
+    if (!widget.showLevel) return;
+    final micState = context.read<MicrophoneState>();
+    final level = micState.getAudioLevel();
+    setState(() {
+      if (micState.isMicEnabled) {
+        _currentLevel = level > 0.0 ? level.clamp(0.02, 1.0) : 0.02;
+      } else {
+        _currentLevel = 0.0;
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _controller.removeListener(_pollLevel);
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bool mutedVisual = widget.isMuted;
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+      decoration: BoxDecoration(
+        color: widget.isActive ? AppColors.sequencerSurfaceRaised : AppColors.sequencerSurfaceBase,
+        borderRadius: BorderRadius.circular(2),
+        border: Border.all(
+          color: widget.isActive ? AppColors.sequencerAccent : AppColors.sequencerBorder,
+          width: widget.isActive ? 1.0 : 0.5,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.sequencerShadow,
+            blurRadius: widget.isActive ? 2 : 1,
+            offset: Offset(0, widget.isActive ? 1 : 0.5),
+          ),
+        ],
+      ),
+      child: Stack(
+        children: [
+          if (widget.showLevel && _currentLevel > 0.0)
+            Positioned.fill(
+              child: CustomPaint(
+                painter: _TabLevelBarPainter(level: _currentLevel),
+              ),
+            ),
+          if (mutedVisual)
+            Positioned.fill(
+              child: IgnorePointer(
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: Colors.black.withOpacity(0.22),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+            ),
+          Center(
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.baseline,
+              textBaseline: TextBaseline.alphabetic,
+              children: [
+                Text(
+                  widget.label,
+                  style: GoogleFonts.sourceSans3(
+                    color: mutedVisual
+                        ? AppColors.sequencerLightText.withOpacity(0.65)
+                        : (widget.isActive ? AppColors.sequencerText : AppColors.sequencerLightText),
+                    fontSize: 12,
+                    fontWeight: widget.isActive ? FontWeight.bold : FontWeight.w600,
+                    letterSpacing: 1,
+                  ),
+                ),
+                if (widget.isMuted) ...[
+                  const SizedBox(width: 2),
+                  Text(
+                    'M',
+                    style: GoogleFonts.sourceSans3(
+                      color: AppColors.menuErrorColor,
+                      fontSize: 9,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+                if (widget.isSoloed) ...[
+                  const SizedBox(width: 2),
+                  Text(
+                    'S',
+                    style: GoogleFonts.sourceSans3(
+                      color: const Color(0xFFF4D35E),
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TabLevelBarPainter extends CustomPainter {
+  final double level;
+  _TabLevelBarPainter({required this.level});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final levelWidth = size.width * level.clamp(0.0, 1.0);
+    final paint = Paint()
+      ..color = (level > 0.8
+          ? Colors.red
+          : (level > 0.5 ? Colors.orange : Colors.green)).withOpacity(0.25)
+      ..style = PaintingStyle.fill;
+    final rect = Rect.fromLTWH(0, 0, levelWidth, size.height);
+    canvas.drawRRect(RRect.fromRectAndRadius(rect, const Radius.circular(2)), paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _TabLevelBarPainter oldDelegate) => oldDelegate.level != level;
+}
+
+// Full-screen sample browser dialog, styled like the takes menu
+class _RecLayerRecordButton extends StatefulWidget {
+  final int layer;
+  const _RecLayerRecordButton({required this.layer});
+
+  @override
+  State<_RecLayerRecordButton> createState() => _RecLayerRecordButtonState();
+}
+
+class _RecLayerRecordButtonState extends State<_RecLayerRecordButton>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _pulseController;
+  late Animation<double> _pulseAnimation;
+
+  // Drag-up tracking
+  double _dragDy = 0.0;
+  bool _dragTriggered = false;
+  static const double _dragThreshold = 40.0;
+
+  @override
+  void initState() {
+    super.initState();
+    _pulseController = AnimationController(
+      duration: const Duration(milliseconds: 900),
+      vsync: this,
+    )..repeat(reverse: true);
+    _pulseAnimation = Tween<double>(begin: 0.5, end: 1.0).animate(
+      CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
+    );
+  }
+
+  @override
+  void dispose() {
+    _pulseController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _startRecording(BuildContext context) async {
+    final recordingState = context.read<RecordingState>();
+    final micState = context.read<MicrophoneState>();
+    final playbackState = context.read<PlaybackState>();
+
+    // Stop output while recording (no feedback like a messenger app)
+    if (playbackState.isPlaying) {
+      playbackState.stop();
+    }
+
+    final micReady = micState.isMicEnabled && micState.checkMicActive();
+    if (!micReady) {
+      final success = await micState.enableMicrophone();
+      if (!success) {
+        if (context.mounted && micState.errorMessage != null) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(micState.errorMessage!),
+              duration: const Duration(seconds: 3),
+              backgroundColor: Colors.red.shade700,
+            ),
+          );
+        }
+        return;
+      }
+    }
+    await recordingState.startRecording(layer: widget.layer);
+  }
+
+  Future<void> _handleTap(BuildContext context) async {
+    final recordingState = context.read<RecordingState>();
+    if (recordingState.isRecording) {
+      await recordingState.stopRecording();
+    } else {
+      await _startRecording(context);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final recordingState = context.watch<RecordingState>();
+    final isRecording = recordingState.isRecording;
+
+    return GestureDetector(
+      onTap: () => _handleTap(context),
+      onVerticalDragStart: (_) {
+        setState(() {
+          _dragDy = 0.0;
+          _dragTriggered = false;
+        });
+      },
+      onVerticalDragUpdate: (details) {
+        if (isRecording) return;
+        setState(() {
+          _dragDy = (_dragDy + details.delta.dy).clamp(-_dragThreshold * 1.5, 0.0);
+        });
+        if (!_dragTriggered && _dragDy <= -_dragThreshold) {
+          setState(() => _dragTriggered = true);
+          _startRecording(context);
+        }
+      },
+      onVerticalDragEnd: (_) {
+        setState(() {
+          _dragDy = 0.0;
+          _dragTriggered = false;
+        });
+      },
+      child: AnimatedBuilder(
+        animation: _pulseAnimation,
+        builder: (context, child) {
+          final pulseOpacity = isRecording ? _pulseAnimation.value : 1.0;
+          final dragProgress = (-_dragDy / _dragThreshold).clamp(0.0, 1.0);
+
+          return Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              // ── Static drag indicator (never moves) ──
+              if (!isRecording)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 4),
+                  child: SizedBox(
+                    width: 20,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        // Chevron arrow
+                        Icon(
+                          Icons.keyboard_arrow_up,
+                          size: 13,
+                          color: AppColors.sequencerLightText,
+                        ),
+                        // Track area: thumb travels upward
+                        SizedBox(
+                          width: 20,
+                          height: 32,
+                          child: Stack(
+                            alignment: Alignment.bottomCenter,
+                            children: [
+                              // Track line — centered
+                              Center(
+                                child: Container(
+                                  width: 2,
+                                  height: 32,
+                                  decoration: BoxDecoration(
+                                    color: AppColors.sequencerLightText,
+                                    borderRadius: BorderRadius.circular(1),
+                                  ),
+                                ),
+                              ),
+                              // Thumb — slides upward as you drag
+                              Positioned(
+                                bottom: (dragProgress * 22).floorToDouble(),
+                                child: Container(
+                                  width: 3,
+                                  height: 7,
+                                  decoration: BoxDecoration(
+                                    color: AppColors.sequencerLightText,
+                                    borderRadius: BorderRadius.circular(1.5),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+
+              // ── Round button — moves upward on drag ──
+              Opacity(
+                opacity: pulseOpacity,
+                child: Transform.translate(
+                  offset: Offset(0, _dragDy),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 150),
+                    width: 56,
+                    height: 56,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: isRecording
+                          ? AppColors.sequencerPrimaryButton
+                          : AppColors.sequencerSurfaceBase,
+                      border: Border.all(
+                        color: isRecording
+                            ? AppColors.sequencerPrimaryButton
+                            : AppColors.sequencerBorder,
+                        width: 0.5,
+                      ),
+                    ),
+                    child: Center(
+                      child: isRecording
+                          ? Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Container(
+                                  width: 6,
+                                  height: 6,
+                                  decoration: const BoxDecoration(
+                                    color: Colors.white,
+                                    shape: BoxShape.circle,
+                                  ),
+                                ),
+                                const SizedBox(width: 4),
+                                const Icon(
+                                  Icons.stop,
+                                  size: 16,
+                                  color: Colors.white,
+                                ),
+                              ],
+                            )
+                          : Icon(
+                              Icons.mic,
+                              size: 22,
+                              color: AppColors.sequencerLightText,
+                            ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+}

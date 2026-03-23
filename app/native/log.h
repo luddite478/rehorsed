@@ -1,5 +1,5 @@
-#ifndef FORTUNED_LOG_H
-#define FORTUNED_LOG_H
+#ifndef REHORSED_LOG_H
+#define REHORSED_LOG_H
 
 #ifdef prnt
 #undef prnt

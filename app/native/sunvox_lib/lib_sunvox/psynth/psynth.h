@@ -421,6 +421,11 @@ enum
 #define PSYNTH_GET_VIS_SHADOW_OPACITY( pars ) ( ( pars >> 26 ) & 3 ) //0 - invisible; 3 - visible;
 #define PSYNTH_GET_VIS_FLAGS( pars ) ( ( pars >> 28 ) & 15 )
 
+//Render mode flags for psynth_net (for Input module volume control):
+#define PSYNTH_RENDER_FLAG_NORMAL     0
+#define PSYNTH_RENDER_FLAG_MONITORING (1 << 0)  // Rendering for speakers (monitoring)
+#define PSYNTH_RENDER_FLAG_RECORDING  (1 << 1)  // Rendering for file recording
+
 //Module flags:
 //(static or rarely mutable; can be changed from UI - need to be fixed? maybe add flags2 for SELECTED, SELECTED2, JUST_LOADED, LAST?)
 #define PSYNTH_FLAG_EXISTS			( 1 << 0 )
@@ -764,6 +769,7 @@ struct psynth_net
     void*		in_buf;
     sound_buffer_type	in_buf_type;
     int			in_buf_channels;
+    uint32_t		render_flags;  // Render mode flags (PSYNTH_RENDER_FLAG_*)
 
     //Scope buffers:
 

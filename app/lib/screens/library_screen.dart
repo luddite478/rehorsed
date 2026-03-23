@@ -1,4 +1,4 @@
-import 'dart:io';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
@@ -6,12 +6,18 @@ import 'package:share_plus/share_plus.dart';
 import '../utils/app_colors.dart';
 import '../widgets/library_header_widget.dart';
 import '../widgets/bottom_audio_player.dart';
-import '../models/playlist_item.dart';
-import '../models/thread/message.dart';
+import '../models/library_item.dart';
 import '../state/audio_player_state.dart';
 import '../state/library_state.dart';
-import '../state/user_state.dart';
-import '../services/audio_cache_service.dart';
+import '../state/library_samples_state.dart';
+import '../state/patterns_state.dart';
+import '../state/sequencer/table.dart';
+import '../state/sequencer/sample_bank.dart';
+import '../ffi/table_bindings.dart';
+import '../ffi/playback_bindings.dart';
+import '../ffi/sample_bank_bindings.dart';
+import '../utils/local_audio_path.dart';
+import 'sequencer_screen.dart';
 
 class LibraryScreen extends StatefulWidget {
   const LibraryScreen({Key? key}) : super(key: key);
@@ -23,6 +29,7 @@ class LibraryScreen extends StatefulWidget {
 class _LibraryScreenState extends State<LibraryScreen> with TickerProviderStateMixin, AutomaticKeepAliveClientMixin, WidgetsBindingObserver {
   late TabController _tabController;
   bool _isCallbackActive = false;
+  bool _isOpeningPattern = false;
   
   @override
   bool get wantKeepAlive => true;
@@ -31,14 +38,17 @@ class _LibraryScreenState extends State<LibraryScreen> with TickerProviderStateM
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
-    _loadPlaylist();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _loadLibrary();
+      _loadLibrarySamples();
+    });
     _setupAudioPlayerCallback();
     WidgetsBinding.instance.addObserver(this);
   }
   
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    // Handle app lifecycle changes
     if (state == AppLifecycleState.resumed && mounted) {
       _setupAudioPlayerCallback();
     } else if (state == AppLifecycleState.paused) {
@@ -46,16 +56,13 @@ class _LibraryScreenState extends State<LibraryScreen> with TickerProviderStateM
     }
   }
   
-  Future<void> _loadPlaylist() async {
-    final userState = context.read<UserState>();
-    final userId = userState.currentUser?.id;
-    
-    if (userId == null) return;
-    
+  Future<void> _loadLibrary() async {
     final libraryState = context.read<LibraryState>();
-    
-    // Load playlist (only loads once on first call)
-    await libraryState.loadPlaylist(userId: userId);
+    await libraryState.loadLibrary();
+  }
+
+  Future<void> _loadLibrarySamples() async {
+    await context.read<LibrarySamplesState>().initialize();
   }
   
   void _setupAudioPlayerCallback() {
@@ -65,21 +72,18 @@ class _LibraryScreenState extends State<LibraryScreen> with TickerProviderStateM
       if (!mounted) return;
       final audioPlayer = context.read<AudioPlayerState>();
       
-      // Track completion callback
       audioPlayer.setTrackCompletionCallback(() {
         if (mounted && _isCallbackActive) {
           _playNextTrack(autoAdvance: true);
         }
       });
       
-      // Next track callback
       audioPlayer.setNextTrackCallback(() {
         if (mounted && _isCallbackActive) {
           _playNextTrack();
         }
       });
       
-      // Previous track callback
       audioPlayer.setPreviousTrackCallback(() {
         if (mounted && _isCallbackActive) {
           _playPreviousTrack();
@@ -105,58 +109,52 @@ class _LibraryScreenState extends State<LibraryScreen> with TickerProviderStateM
   void _playNextTrack({bool autoAdvance = false}) {
     final libraryState = context.read<LibraryState>();
     final audioPlayer = context.read<AudioPlayerState>();
-    final playlist = libraryState.playlist;
+    final library = libraryState.library;
     
-    if (playlist.isEmpty) return;
+    if (library.isEmpty) return;
     
-    final currentRenderId = audioPlayer.currentlyPlayingRenderId;
-    if (currentRenderId == null) return;
+    final currentItemId = audioPlayer.currentlyPlayingItemId;
+    if (currentItemId == null) return;
     
-    final currentIndex = playlist.indexWhere((item) => item.id == currentRenderId);
+    final currentIndex = library.indexWhere((item) => item.id == currentItemId);
     if (currentIndex == -1) return;
     
     int nextIndex;
     
-    // If shuffle is enabled, pick a random track (excluding current)
-    if (audioPlayer.shuffleEnabled && playlist.length > 1) {
+    if (audioPlayer.shuffleEnabled && library.length > 1) {
       do {
-        nextIndex = (DateTime.now().millisecondsSinceEpoch % playlist.length);
+        nextIndex = (DateTime.now().millisecondsSinceEpoch % library.length);
       } while (nextIndex == currentIndex);
     } else {
-      // Normal sequential playback
       nextIndex = currentIndex + 1;
       
-      // Handle end of playlist
-      if (nextIndex >= playlist.length) {
+      if (nextIndex >= library.length) {
         if (autoAdvance && audioPlayer.loopMode == LoopMode.playlist) {
-          // Loop back to start
           nextIndex = 0;
         } else {
-          // Just pause at the end
           audioPlayer.pause();
           return;
         }
       }
     }
     
-    final nextItem = playlist[nextIndex];
-    _playPlaylistItem(nextItem);
+    final nextItem = library[nextIndex];
+    _playLibraryItem(nextItem);
   }
   
   void _playPreviousTrack() {
     final libraryState = context.read<LibraryState>();
     final audioPlayer = context.read<AudioPlayerState>();
-    final playlist = libraryState.playlist;
+    final library = libraryState.library;
     
-    if (playlist.isEmpty) return;
+    if (library.isEmpty) return;
     
-    final currentRenderId = audioPlayer.currentlyPlayingRenderId;
-    if (currentRenderId == null) return;
+    final currentItemId = audioPlayer.currentlyPlayingItemId;
+    if (currentItemId == null) return;
     
-    final currentIndex = playlist.indexWhere((item) => item.id == currentRenderId);
+    final currentIndex = library.indexWhere((item) => item.id == currentItemId);
     if (currentIndex == -1) return;
     
-    // If more than 3 seconds into track, restart current track
     if (audioPlayer.position.inSeconds > 3) {
       audioPlayer.seek(Duration.zero);
       return;
@@ -164,30 +162,25 @@ class _LibraryScreenState extends State<LibraryScreen> with TickerProviderStateM
     
     int prevIndex;
     
-    // If shuffle is enabled, pick a random track (excluding current)
-    if (audioPlayer.shuffleEnabled && playlist.length > 1) {
+    if (audioPlayer.shuffleEnabled && library.length > 1) {
       do {
-        prevIndex = (DateTime.now().millisecondsSinceEpoch % playlist.length);
+        prevIndex = (DateTime.now().millisecondsSinceEpoch % library.length);
       } while (prevIndex == currentIndex);
     } else {
-      // Normal sequential playback
       prevIndex = currentIndex - 1;
       
-      // Handle start of playlist
       if (prevIndex < 0) {
         if (audioPlayer.loopMode == LoopMode.playlist) {
-          // Loop to end
-          prevIndex = playlist.length - 1;
+          prevIndex = library.length - 1;
         } else {
-          // Just restart current track
           audioPlayer.seek(Duration.zero);
           return;
         }
       }
     }
     
-    final prevItem = playlist[prevIndex];
-    _playPlaylistItem(prevItem);
+    final prevItem = library[prevIndex];
+    _playLibraryItem(prevItem);
   }
   
   @override
@@ -200,11 +193,10 @@ class _LibraryScreenState extends State<LibraryScreen> with TickerProviderStateM
 
   @override
   Widget build(BuildContext context) {
-    super.build(context); // Required for AutomaticKeepAliveClientMixin
+    super.build(context);
     
     return WillPopScope(
       onWillPop: () async {
-        // Stop audio when navigating back to ProjectsScreen (handles system back button/swipe)
         try {
           context.read<AudioPlayerState>().stop();
         } catch (_) {}
@@ -212,95 +204,101 @@ class _LibraryScreenState extends State<LibraryScreen> with TickerProviderStateM
       },
       child: Scaffold(
         backgroundColor: AppColors.sequencerPageBackground,
-        body: Column(
-        children: [
-          Expanded(
-            child: SafeArea(
-              child: Column(
-                children: [
-                  // Library header with back button
-                  const LibraryHeaderWidget(),
-                  
-                  // Tab bar
-                  Container(
-                    decoration: BoxDecoration(
-                      color: AppColors.sequencerSurfaceRaised,
-                      border: Border(
-                        bottom: BorderSide(
-                          color: AppColors.sequencerBorder,
-                          width: 1,
-                        ),
-                      ),
-                    ),
-                    child: TabBar(
-                      controller: _tabController,
-                      tabs: const [
-                        Tab(text: 'PLAYLIST'),
-                        Tab(text: 'SAMPLES'),
-                      ],
-                      labelColor: AppColors.sequencerText,
-                      unselectedLabelColor: AppColors.sequencerLightText,
-                      labelStyle: GoogleFonts.sourceSans3(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: 1.5,
-                      ),
-                      unselectedLabelStyle: GoogleFonts.sourceSans3(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
-                        letterSpacing: 1.5,
-                      ),
-                      indicatorColor: AppColors.sequencerText,
-                      indicatorWeight: 2,
-                    ),
-                  ),
-                  
-                  // Tab content
-                  Expanded(
-                    child: TabBarView(
-                      controller: _tabController,
+        body: Stack(
+          children: [
+            Column(
+              children: [
+                Expanded(
+                  child: SafeArea(
+                    child: Column(
                       children: [
-                        _buildPlaylistsTab(),
-                        _buildSamplesTab(),
+                        const LibraryHeaderWidget(),
+                        
+                        Container(
+                          decoration: BoxDecoration(
+                            color: AppColors.sequencerSurfaceRaised,
+                            border: Border(
+                              bottom: BorderSide(
+                                color: AppColors.sequencerBorder,
+                                width: 1,
+                              ),
+                            ),
+                          ),
+                          child: TabBar(
+                            controller: _tabController,
+                            tabs: const [
+                              Tab(text: 'RECORDINGS'),
+                              Tab(text: 'SAMPLES'),
+                            ],
+                            labelColor: AppColors.sequencerText,
+                            unselectedLabelColor: AppColors.sequencerLightText,
+                            labelStyle: GoogleFonts.sourceSans3(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: 1.5,
+                            ),
+                            unselectedLabelStyle: GoogleFonts.sourceSans3(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w500,
+                              letterSpacing: 1.5,
+                            ),
+                            indicatorColor: AppColors.sequencerText,
+                            indicatorWeight: 2,
+                          ),
+                        ),
+                        
+                        Expanded(
+                          child: TabBarView(
+                            controller: _tabController,
+                            children: [
+                              _buildLibraryTab(),
+                              _buildSamplesTab(),
+                            ],
+                          ),
+                        ),
                       ],
                     ),
                   ),
-                ],
-              ),
+                ),
+                const BottomAudioPlayer(),
+              ],
             ),
-          ),
-          // Audio player at the bottom
-          const BottomAudioPlayer(),
-        ],
-      ),
+            if (_isOpeningPattern)
+              Positioned.fill(
+                child: Container(
+                  color: AppColors.sequencerPageBackground.withOpacity(0.75),
+                  child: Center(
+                    child: Text(
+                      'Loading pattern...',
+                      style: GoogleFonts.sourceSans3(
+                        color: AppColors.sequencerText,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }
 
-
-
-  Widget _buildPlaylistsTab() {
+  Widget _buildLibraryTab() {
     return Consumer2<LibraryState, AudioPlayerState>(
       builder: (context, libraryState, audioPlayer, _) {
-        // Show loading indicator only on initial load
         if (libraryState.isLoading && !libraryState.hasLoaded) {
           return const Center(child: CircularProgressIndicator());
         }
         
-        // Show empty state
-        if (libraryState.playlist.isEmpty) {
+        if (libraryState.library.isEmpty) {
           return Center(
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                // Icon(
-                //   Icons.library_music_outlined,
-                //   color: AppColors.sequencerLightText,
-                //   size: 48,
-                // ),
-                // const SizedBox(height: 12),
                 Text(
-                  'Your playlist is empty',
+                  'Your library is empty',
                   style: GoogleFonts.sourceSans3(
                     color: AppColors.sequencerLightText,
                     fontSize: 16,
@@ -309,7 +307,7 @@ class _LibraryScreenState extends State<LibraryScreen> with TickerProviderStateM
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  'Add audio recordings from projects history',
+                  'Add audio recordings from the sequencer',
                   style: GoogleFonts.sourceSans3(
                     color: AppColors.sequencerLightText,
                     fontSize: 12,
@@ -322,10 +320,10 @@ class _LibraryScreenState extends State<LibraryScreen> with TickerProviderStateM
         
         return ListView.builder(
           padding: const EdgeInsets.only(top: 2),
-          itemCount: libraryState.playlist.length,
+          itemCount: libraryState.library.length,
           itemBuilder: (context, index) {
-            final item = libraryState.playlist[index];
-            final isPlaying = audioPlayer.currentlyPlayingRenderId == item.id && audioPlayer.isPlaying;
+            final item = libraryState.library[index];
+            final isPlaying = audioPlayer.currentlyPlayingItemId == item.id && audioPlayer.isPlaying;
         
             return Container(
               height: 60,
@@ -344,13 +342,12 @@ class _LibraryScreenState extends State<LibraryScreen> with TickerProviderStateM
               child: Material(
                 color: Colors.transparent,
                 child: InkWell(
-                  onTap: () => _playPlaylistItem(item),
+                  onTap: () => _playLibraryItem(item),
                   onLongPress: () => _showRemoveDialog(item),
                   child: Container(
                     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                     child: Row(
                       children: [
-                        // Static note icon (no circle background)
                         Icon(
                           Icons.music_note,
                           color: AppColors.sequencerText,
@@ -358,40 +355,19 @@ class _LibraryScreenState extends State<LibraryScreen> with TickerProviderStateM
                         ),
                         const SizedBox(width: 10),
                         
-                        // Item info
                         Expanded(
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
-                              Row(
-                                children: [
-                                  Expanded(
-                                    child: Text(
-                                      item.name,
-                                      style: GoogleFonts.sourceSans3(
-                                        color: AppColors.sequencerText,
-                                        fontSize: 14,
-                                        fontWeight: FontWeight.w600,
-                                      ),
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                  ),
-                                  // Upload indicator
-                                  if (item.uploadStatus == RenderUploadStatus.uploading) ...[
-                                    const SizedBox(width: 4),
-                                    SizedBox(
-                                      width: 10,
-                                      height: 10,
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 1.5,
-                                        valueColor: AlwaysStoppedAnimation<Color>(
-                                          AppColors.sequencerLightText.withOpacity(0.5),
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ],
+                              Text(
+                                item.name,
+                                style: GoogleFonts.sourceSans3(
+                                  color: AppColors.sequencerText,
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                                overflow: TextOverflow.ellipsis,
                               ),
                               if (item.duration != null) ...[
                                 const SizedBox(height: 2),
@@ -408,30 +384,60 @@ class _LibraryScreenState extends State<LibraryScreen> with TickerProviderStateM
                         ),
                         
                         const SizedBox(width: 8),
-                        
-                        // Share button (disabled if still uploading or invalid URL)
                         Builder(
                           builder: (buttonContext) => IconButton(
                             icon: Icon(
                               Icons.share,
-                              color: (item.uploadStatus == RenderUploadStatus.uploading || 
-                                     item.url.isEmpty || 
-                                     !item.url.startsWith('http'))
-                                  ? AppColors.sequencerLightText.withOpacity(0.3)
-                                  : AppColors.sequencerLightText,
+                              color: AppColors.sequencerLightText,
                               size: 20,
                             ),
-                            onPressed: (item.uploadStatus == RenderUploadStatus.uploading || 
-                                       item.url.isEmpty || 
-                                       !item.url.startsWith('http'))
-                                ? null
-                                : () => _sharePlaylistItem(item, buttonContext),
+                            onPressed: () => _shareLibraryItem(item, buttonContext),
                             padding: EdgeInsets.zero,
                             constraints: const BoxConstraints(
                               minWidth: 40,
                               minHeight: 40,
                             ),
                           ),
+                        ),
+                        PopupMenuButton<String>(
+                          icon: Icon(
+                            Icons.more_vert,
+                            color: AppColors.sequencerLightText,
+                            size: 20,
+                          ),
+                          padding: EdgeInsets.zero,
+                          color: AppColors.sequencerSurfaceRaised,
+                          onSelected: (value) {
+                            if (value == 'open_pattern') {
+                              _openLinkedPattern(item);
+                            } else if (value == 'delete') {
+                              _showRemoveDialog(item);
+                            }
+                          },
+                          itemBuilder: (context) => [
+                            PopupMenuItem(
+                              value: 'open_pattern',
+                              child: Text(
+                                'Open Pattern',
+                                style: GoogleFonts.sourceSans3(
+                                  color: AppColors.sequencerText,
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                            PopupMenuItem(
+                              value: 'delete',
+                              child: Text(
+                                'Delete',
+                                style: GoogleFonts.sourceSans3(
+                                  color: AppColors.sequencerAccent,
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
                       ],
                     ),
@@ -451,42 +457,23 @@ class _LibraryScreenState extends State<LibraryScreen> with TickerProviderStateM
     return '$minutes:${seconds.toString().padLeft(2, '0')}';
   }
   
-  Future<void> _playPlaylistItem(PlaylistItem item) async {
+  Future<void> _playLibraryItem(LibraryItem item) async {
     final audioPlayer = context.read<AudioPlayerState>();
     
-    // Debug: Only log when ID issues detected
-    if (item.id.isEmpty) {
-      debugPrint('⚠️ [LIBRARY] Playing item "${item.name}" with EMPTY ID!');
-    }
-    
-    // Create a minimal Render object for playback
-    final render = Render(
-      id: item.id,
-      url: item.url,
-      format: item.format,
-      bitrate: item.bitrate,
-      duration: item.duration,
-      sizeBytes: item.sizeBytes,
-      createdAt: item.createdAt,
-      localPath: item.localPath, // For instant playback!
-      uploadStatus: item.uploadStatus,
-    );
-    
-    await audioPlayer.playRender(
-      messageId: 'playlist', // Use 'playlist' as a special message ID
-      render: render,
-      localPathIfRecorded: item.localPath, // Use local file if available
+    await audioPlayer.playFromPath(
+      itemId: item.id,
+      localPath: item.localPath,
     );
   }
   
-  void _showRemoveDialog(PlaylistItem item) {
+  void _showRemoveDialog(LibraryItem item) {
     showDialog(
       context: context,
       builder: (BuildContext context) {
         return AlertDialog(
           backgroundColor: AppColors.sequencerSurfaceRaised,
           title: Text(
-            'Remove from Playlist',
+            'Remove from Library',
             style: GoogleFonts.sourceSans3(
               color: AppColors.sequencerText,
               fontSize: 16,
@@ -494,7 +481,7 @@ class _LibraryScreenState extends State<LibraryScreen> with TickerProviderStateM
             ),
           ),
           content: Text(
-            'Are you sure you want to remove "${item.name}" from your playlist?',
+            'Are you sure you want to remove "${item.name}" from your library?',
             style: GoogleFonts.sourceSans3(
               color: AppColors.sequencerLightText,
               fontSize: 14,
@@ -516,7 +503,7 @@ class _LibraryScreenState extends State<LibraryScreen> with TickerProviderStateM
             TextButton(
               onPressed: () {
                 Navigator.of(context).pop();
-                _removeFromPlaylist(item);
+                _removeFromLibrary(item);
               },
               child: Text(
                 'Remove',
@@ -533,51 +520,29 @@ class _LibraryScreenState extends State<LibraryScreen> with TickerProviderStateM
     );
   }
   
-  Future<void> _removeFromPlaylist(PlaylistItem item) async {
-    final userState = context.read<UserState>();
-    final userId = userState.currentUser?.id;
-    
-    if (userId == null) return;
-    
+  Future<void> _removeFromLibrary(LibraryItem item) async {
     final libraryState = context.read<LibraryState>();
-    final success = await libraryState.removeFromPlaylist(
-      userId: userId,
-      renderId: item.id,
-    );
+    final success = await libraryState.removeFromLibrary(item.id);
     
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(success ? 'Removed from playlist' : 'Failed to remove'),
+          content: Text(success ? 'Removed from library' : 'Failed to remove'),
           backgroundColor: success ? AppColors.sequencerAccent : Colors.red.shade900,
           duration: const Duration(seconds: 1),
         ),
       );
     }
   }
-  
-  Future<void> _sharePlaylistItem(PlaylistItem item, BuildContext buttonContext) async {
+
+  Future<void> _shareLibraryItem(LibraryItem item, BuildContext buttonContext) async {
     try {
-      // Check if track is still uploading
-      if (item.uploadStatus == RenderUploadStatus.uploading) {
+      final resolved = await LocalAudioPath.resolve(item.localPath);
+      if (resolved == null) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: const Text('Track is still uploading. Please wait...'),
-              backgroundColor: AppColors.sequencerAccent,
-              duration: const Duration(seconds: 2),
-            ),
-          );
-        }
-        return;
-      }
-      
-      // Check if URL is valid
-      if (item.url.isEmpty || !item.url.startsWith('http')) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: const Text('Track URL is not available'),
+              content: const Text('Audio file not found'),
               backgroundColor: Colors.red.shade900,
               duration: const Duration(seconds: 2),
             ),
@@ -586,67 +551,19 @@ class _LibraryScreenState extends State<LibraryScreen> with TickerProviderStateM
         return;
       }
       
-      // Get local file path - check cache first, download if needed
-      String? localPath = item.localPath;
-      
-      // If not in localPath, check if it's cached
-      if (localPath == null || !await File(localPath).exists()) {
-        localPath = await AudioCacheService.getCachedPath(item.url);
-      }
-      
-      // If still not available, download it with progress dialog
-      if (localPath == null || !await File(localPath).exists()) {
-        if (!mounted) return;
-        
-        // Show downloading dialog
-        showDialog(
-          context: context,
-          barrierDismissible: false,
-          builder: (BuildContext dialogContext) {
-            return _DownloadingDialog(trackName: item.name);
-          },
-        );
-        
-        // Download from S3
-        localPath = await AudioCacheService.downloadAndCache(item.url);
-        
-        // Close downloading dialog
-        if (mounted) {
-          Navigator.of(context, rootNavigator: true).pop();
-        }
-        
-        if (localPath == null) {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: const Text('Failed to download track'),
-                backgroundColor: Colors.red.shade900,
-                duration: const Duration(seconds: 2),
-              ),
-            );
-          }
-          return;
-        }
-      }
-      
-      // Calculate the share button position for iOS
       final box = buttonContext.findRenderObject() as RenderBox?;
       final Rect sharePositionOrigin = box == null
-          ? Rect.fromLTWH(0, 0, 100, 100) // Fallback position
+          ? Rect.fromLTWH(0, 0, 100, 100)
           : box.localToGlobal(Offset.zero) & box.size;
       
-      // Share the actual audio file (not just URL)
-      final xFile = XFile(localPath);
+      final xFile = XFile(resolved);
       await Share.shareXFiles(
         [xFile],
         subject: item.name,
         text: item.name,
         sharePositionOrigin: sharePositionOrigin,
       );
-      
-      debugPrint('✅ [LIBRARY] Shared file: $localPath');
     } catch (e) {
-      debugPrint('❌ Failed to share playlist item: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -658,92 +575,486 @@ class _LibraryScreenState extends State<LibraryScreen> with TickerProviderStateM
       }
     }
   }
+  
+  Future<void> _openLinkedPattern(LibraryItem item) async {
+    final sourcePatternId = item.sourcePatternId;
+    if (sourcePatternId == null) {
+      if (mounted) {
+        _showPatternNotFoundDialog();
+      }
+      return;
+    }
 
-  Widget _buildSamplesTab() {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          // Icon(
-          //   Icons.music_note,
-          //   color: AppColors.sequencerLightText,
-          //   size: 48,
-          // ),
-          // const SizedBox(height: 12),
-          Text(
-            'Samples',
+    try {
+      if (mounted) {
+        setState(() {
+          _isOpeningPattern = true;
+        });
+      }
+      // Let Flutter paint the loading overlay before doing heavy work.
+      await Future<void>.delayed(const Duration(milliseconds: 16));
+      await WidgetsBinding.instance.endOfFrame;
+
+      final patternsState = context.read<PatternsState>();
+      final audioPlayer = context.read<AudioPlayerState>();
+      final tableState = context.read<TableState>();
+      final sampleBankState = context.read<SampleBankState>();
+
+      await patternsState.loadPatterns();
+
+      final index = patternsState.patterns.indexWhere((p) => p.id == sourcePatternId);
+      if (index < 0) {
+        if (!mounted) return;
+        _showPatternNotFoundDialog();
+        return;
+      }
+
+      final pattern = patternsState.patterns[index];
+
+      await audioPlayer.stop();
+      await patternsState.setActivePattern(pattern);
+
+      tableState.resetAllLayerModes();
+      tableState.setUiSelectedLayer(0);
+
+      try {
+        TableBindings().tableInit();
+        PlaybackBindings().playbackInit();
+        SampleBankBindings().sampleBankInit();
+        sampleBankState.syncSampleBankState();
+      } catch (e) {
+        debugPrint('❌ Failed to init native systems from library: $e');
+      }
+
+      if (!mounted) return;
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => const PatternScreen(initialSnapshot: null),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to open source pattern: $e'),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isOpeningPattern = false;
+        });
+      }
+    }
+  }
+
+  void _showPatternNotFoundDialog() {
+    showDialog(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          backgroundColor: AppColors.sequencerSurfaceRaised,
+          title: Text(
+            'Pattern Not Found',
             style: GoogleFonts.sourceSans3(
-              color: AppColors.sequencerLightText,
+              color: AppColors.sequencerText,
               fontSize: 16,
-              fontWeight: FontWeight.w600,
+              fontWeight: FontWeight.w700,
             ),
           ),
-          const SizedBox(height: 8),
-          Text(
-            'Coming soon',
+          content: Text(
+            'This pattern does not exist anymore.',
             style: GoogleFonts.sourceSans3(
               color: AppColors.sequencerLightText,
-              fontSize: 12,
+              fontSize: 14,
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: Text(
+                'OK',
+                style: GoogleFonts.sourceSans3(
+                  color: AppColors.sequencerAccent,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildSamplesTab() {
+    return Consumer<LibrarySamplesState>(
+      builder: (context, samplesState, _) {
+        if (samplesState.isLoading && !samplesState.isInitialized) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
+        return Column(
+          children: [
+            _buildSamplesNavBar(samplesState),
+            Expanded(
+              child: samplesState.isAtRoot
+                  ? _buildSamplesRootGrid(samplesState)
+                  : _buildSamplesContent(samplesState),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildSamplesNavBar(LibrarySamplesState state) {
+    final canGoBack = !state.isAtRoot;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: AppColors.sequencerSurfaceRaised,
+        border: Border(
+          bottom: BorderSide(color: AppColors.sequencerBorder, width: 0.5),
+        ),
+      ),
+      child: Row(
+        children: [
+          if (canGoBack)
+            GestureDetector(
+              onTap: state.navigateBack,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: AppColors.sequencerSurfaceBase,
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(color: AppColors.sequencerBorder, width: 1),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.arrow_back, color: AppColors.sequencerText, size: 16),
+                    const SizedBox(width: 4),
+                    Text(
+                      'BACK',
+                      style: GoogleFonts.sourceSans3(
+                        color: AppColors.sequencerText,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: 1,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          if (canGoBack) const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              state.currentPathLabel,
+              style: GoogleFonts.sourceSans3(
+                color: AppColors.sequencerLightText,
+                fontSize: 11,
+                fontWeight: FontWeight.w400,
+                letterSpacing: 0.3,
+              ),
+              overflow: TextOverflow.ellipsis,
             ),
           ),
         ],
       ),
     );
   }
-}
 
-// Downloading dialog widget
-class _DownloadingDialog extends StatelessWidget {
-  final String trackName;
-  
-  const _DownloadingDialog({required this.trackName});
-  
-  @override
-  Widget build(BuildContext context) {
-    return Dialog(
-      backgroundColor: AppColors.sequencerSurfaceRaised,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // Spinner
-            SizedBox(
-              width: 40,
-              height: 40,
-              child: CircularProgressIndicator(
-                color: AppColors.sequencerText,
-                strokeWidth: 3,
-              ),
-            ),
-            const SizedBox(height: 20),
-            // Message
-            Text(
-              'Downloading track',
-              style: GoogleFonts.sourceSans3(
-                color: AppColors.sequencerText,
-                fontSize: 16,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              trackName,
-              style: GoogleFonts.sourceSans3(
-                color: AppColors.sequencerLightText,
-                fontSize: 13,
-                fontWeight: FontWeight.w400,
-              ),
-              textAlign: TextAlign.center,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
+  Widget _buildSamplesRootGrid(LibrarySamplesState state) {
+    final customFolders = state.customFolders;
+    final totalTiles = 2 + customFolders.length;
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final spacing = constraints.maxWidth * 0.02;
+        return GridView.builder(
+          padding: EdgeInsets.all(spacing),
+          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: 2,
+            crossAxisSpacing: spacing,
+            mainAxisSpacing: spacing,
+            childAspectRatio: 2.0,
+          ),
+          itemCount: totalTiles,
+          itemBuilder: (context, index) {
+            if (index == 0) {
+              return _buildFolderTile(
+                title: LibrarySamplesState.defaultRootName(),
+                icon: Icons.folder,
+                onTap: state.openDefaultRoot,
+              );
+            }
+            if (index == totalTiles - 1) {
+              return _buildFolderTile(
+                title: '',
+                icon: Icons.add,
+                onTap: _handleAddCustomSamples,
+              );
+            }
+
+            final folder = customFolders[index - 1];
+            return _buildFolderTile(
+              title: folder,
+              icon: Icons.folder,
+              onTap: () => state.openCustomFolder(folder),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildFolderTile({
+    required String title,
+    required IconData icon,
+    required VoidCallback onTap,
+  }) {
+    final hasTitle = title.trim().isNotEmpty;
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        decoration: BoxDecoration(
+          color: AppColors.sequencerSurfaceRaised,
+          borderRadius: BorderRadius.circular(4),
+          border: Border.all(color: AppColors.sequencerBorder, width: 1),
+          boxShadow: [
+            BoxShadow(
+              color: AppColors.sequencerShadow,
+              blurRadius: 2,
+              offset: const Offset(0, 1),
             ),
           ],
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(8),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(icon, color: AppColors.sequencerAccent, size: 28),
+              if (hasTitle) const SizedBox(height: 4),
+              if (hasTitle)
+                Flexible(
+                  child: Text(
+                    title,
+                    style: GoogleFonts.sourceSans3(
+                      color: AppColors.sequencerText,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                    textAlign: TextAlign.center,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+            ],
+          ),
         ),
       ),
     );
   }
-} 
+
+  Widget _buildSamplesContent(LibrarySamplesState state) {
+    if (state.isInDefault) {
+      final items = state.currentBuiltInItems;
+      if (items.isEmpty) {
+        return _buildEmptySamplesMessage('No samples found in this folder.');
+      }
+
+      return ListView.builder(
+        padding: const EdgeInsets.all(8),
+        itemCount: items.length,
+        itemBuilder: (context, index) {
+          final item = items[index];
+          return _buildSampleListItem(
+            title: item.name,
+            subtitle: item.isFolder ? 'Folder' : 'Built-in sample',
+            icon: item.isFolder ? Icons.folder : Icons.audio_file,
+            onTap: item.isFolder
+                ? () => state.openDefaultFolder(item.name)
+                : null,
+          );
+        },
+      );
+    }
+
+    final files = state.currentCustomFiles;
+    if (files.isEmpty) {
+      return _buildEmptySamplesMessage('This custom folder has no imported files.');
+    }
+
+    return ListView.builder(
+      padding: const EdgeInsets.all(8),
+      itemCount: files.length,
+      itemBuilder: (context, index) {
+        final filePath = files[index];
+        return _buildSampleListItem(
+          title: filePath.split('/').last,
+          subtitle: 'Custom sample',
+          icon: Icons.audio_file,
+          onTap: null,
+        );
+      },
+    );
+  }
+
+  Widget _buildSampleListItem({
+    required String title,
+    required String subtitle,
+    required IconData icon,
+    VoidCallback? onTap,
+  }) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 6),
+      decoration: BoxDecoration(
+        color: AppColors.sequencerSurfaceRaised,
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: AppColors.sequencerBorder, width: 1),
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            child: Row(
+              children: [
+                Icon(icon, color: AppColors.sequencerAccent, size: 20),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        style: GoogleFonts.sourceSans3(
+                          color: AppColors.sequencerText,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        subtitle,
+                        style: GoogleFonts.sourceSans3(
+                          color: AppColors.sequencerLightText,
+                          fontSize: 11,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ),
+                ),
+                if (onTap != null)
+                  Icon(Icons.chevron_right, color: AppColors.sequencerLightText, size: 18),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildEmptySamplesMessage(String message) {
+    return Center(
+      child: Text(
+        message,
+        style: GoogleFonts.sourceSans3(
+          color: AppColors.sequencerLightText,
+          fontSize: 12,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _handleAddCustomSamples() async {
+    final folderName = await _showFolderNameDialog();
+    if (!mounted || folderName == null || folderName.trim().isEmpty) {
+      return;
+    }
+
+    final picked = await FilePicker.platform.pickFiles(
+      allowMultiple: true,
+      type: FileType.custom,
+      allowedExtensions: const ['wav', 'mp3', 'm4a', 'aif', 'aiff', 'flac', 'ogg'],
+    );
+    if (!mounted || picked == null || picked.files.isEmpty) {
+      return;
+    }
+
+    final result = await context.read<LibrarySamplesState>().importFilesToCustomFolder(
+      folderName: folderName.trim(),
+      files: picked.files,
+    );
+    if (!mounted) return;
+
+    final isSuccess = result.importedCount > 0;
+    final message = isSuccess
+        ? 'Imported ${result.importedCount} file(s) to "$folderName"'
+        : (result.errorMessage ?? 'No files were imported.');
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: isSuccess ? AppColors.sequencerAccent : Colors.red.shade900,
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
+  Future<String?> _showFolderNameDialog() async {
+    String folderName = '';
+    final result = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          backgroundColor: AppColors.sequencerSurfaceRaised,
+          title: Text(
+            'Create custom folder',
+            style: GoogleFonts.sourceSans3(
+              color: AppColors.sequencerText,
+              fontSize: 16,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          content: TextField(
+            autofocus: true,
+            onChanged: (value) => folderName = value,
+            style: GoogleFonts.sourceSans3(color: AppColors.sequencerText),
+            decoration: InputDecoration(
+              hintText: 'Folder name',
+              hintStyle: GoogleFonts.sourceSans3(color: AppColors.sequencerLightText),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: Text(
+                'Cancel',
+                style: GoogleFonts.sourceSans3(color: AppColors.sequencerLightText),
+              ),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(folderName),
+              child: Text(
+                'Continue',
+                style: GoogleFonts.sourceSans3(color: AppColors.sequencerAccent),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+    return result;
+  }
+}

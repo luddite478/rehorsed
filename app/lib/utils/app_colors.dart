@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-/// Centralized color management for the Fortuned app
+/// Centralized color management for the Rehorsed app
 /// 
 /// Contains two main color palettes:
 /// 1. Sequencer colors - Dark theme for sequencer screens and widgets

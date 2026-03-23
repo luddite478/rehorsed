@@ -153,12 +153,12 @@ Column 2: HiHat (Module 69, reverb=10%)
 ✅ No conflicts!
 ```
 
-## Implementation in Fortuned
+## Implementation in Rehorsed
 
 ### Current Implementation (sunvox_wrapper.mm)
 
 ```cpp
-// Fortuned currently just sets pattern events
+// Rehorsed currently just sets pattern events
 void sunvox_wrapper_sync_cell(int step, int col) {
     // ...
     sv_set_pattern_event(
@@ -226,7 +226,7 @@ SunVox behavior:
 ### Pattern Looping
 
 ```
-With NO_NOTES_OFF flag (Fortuned uses this):
+With NO_NOTES_OFF flag (Rehorsed uses this):
 - Pattern loops back to Line 0
 - Notes DON'T get cancelled at loop boundary
 - Allows seamless looping
@@ -258,7 +258,7 @@ Line 5:
 - Happens BEFORE new note plays
 - Perfect for column-based effect chains
 - Allows safe effect reconfiguration per-cell
-- No additional code needed in Fortuned!
+- No additional code needed in Rehorsed!
 
 **This is why the column-based effect chain architecture works!** 🎯
 

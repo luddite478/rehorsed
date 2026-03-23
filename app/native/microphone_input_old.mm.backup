@@ -1,0 +1,1108 @@
+#include "microphone_input.h"
+#include "log.h"
+#include <pthread.h>
+#include <string.h>
+#include <math.h>
+
+#ifdef __APPLE__
+#import <AVFoundation/AVFoundation.h>
+#import <Foundation/Foundation.h>
+
+#undef LOG_TAG
+#define LOG_TAG "MIC_INPUT"
+
+// Circular buffer for microphone samples
+#define MIC_BUFFER_SIZE (48000 * 2 * 2) // 2 seconds of stereo float32 at 48kHz
+static float g_mic_buffer[MIC_BUFFER_SIZE];
+static int g_mic_write_pos = 0;
+static int g_mic_read_pos = 0;
+static pthread_mutex_t g_mic_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+// AVAudioEngine state
+static AVAudioEngine* g_audio_engine = nil;
+static AVAudioInputNode* g_input_node = nil;
+static int g_is_initialized = 0;
+static int g_is_active = 0;
+
+// Microphone input volume (0.0 - 1.0)
+static float g_mic_volume = 1.0f;
+
+// Audio route information
+static char g_current_audio_route[256] = "Unknown";
+static int g_is_bluetooth_input = 0;
+
+// Forward declaration for route change handler
+static void handle_audio_route_change(NSNotification* notification);
+
+// Initialize microphone input system
+// PERMISSION-SAFE: This can be called at app startup without microphone permission
+// Audio session activation is deferred until mic_input_start() (after permission granted)
+int mic_input_init(void) {
+    pthread_mutex_lock(&g_mic_mutex);
+    
+    if (g_is_initialized) {
+        pthread_mutex_unlock(&g_mic_mutex);
+        prnt("✅ [MIC_INPUT] Already initialized");
+        return 0;
+    }
+    
+    prnt("🎙️ [MIC_INPUT] Initializing microphone input system (permission-safe mode)");
+    
+    // Clear circular buffer
+    memset(g_mic_buffer, 0, sizeof(g_mic_buffer));
+    g_mic_write_pos = 0;
+    g_mic_read_pos = 0;
+    
+    // PERFORMANCE OPTIMIZATION: Just mark as initialized
+    // Engine creation is deferred to mic_input_start() to avoid permission issues
+    // at app startup. Getting inputNode requires audio session to be configured.
+    g_is_initialized = 1;
+    pthread_mutex_unlock(&g_mic_mutex);
+    
+    prnt("✅ [MIC_INPUT] Microphone input system ready (engine will be created on first start)");
+    return 0;
+}
+
+// Start capturing microphone input
+int mic_input_start(void) {
+    pthread_mutex_lock(&g_mic_mutex);
+    
+    if (!g_is_initialized) {
+        pthread_mutex_unlock(&g_mic_mutex);
+        prnt_err("❌ [MIC_INPUT] Not initialized");
+        return -1;
+    }
+    
+    if (g_is_active) {
+        pthread_mutex_unlock(&g_mic_mutex);
+        prnt("⚠️ [MIC_INPUT] Already active");
+        return -2;
+    }
+    
+    prnt("🎙️ [MIC_INPUT] Starting microphone capture");
+    
+    // Create engine and input node if not already created
+    if (!g_audio_engine) {
+        // Configure audio session FIRST (requires permission - user has granted it by now)
+        @try {
+            AVAudioSession* session = [AVAudioSession sharedInstance];
+            NSError* sessionError = nil;
+            
+            // Set category to PlayAndRecord to allow both playback and recording
+            // CRITICAL: Do NOT use DefaultToSpeaker - it prevents Bluetooth routing!
+            BOOL categorySet = [session setCategory:AVAudioSessionCategoryPlayAndRecord 
+                                        withOptions:AVAudioSessionCategoryOptionAllowBluetooth |
+                                                   AVAudioSessionCategoryOptionAllowBluetoothA2DP |
+                                                   AVAudioSessionCategoryOptionMixWithOthers
+                                              error:&sessionError];
+            if (!categorySet || sessionError) {
+                pthread_mutex_unlock(&g_mic_mutex);
+                prnt_err("❌ [MIC_INPUT] Failed to set audio session category: %s", 
+                        sessionError ? [[sessionError localizedDescription] UTF8String] : "unknown");
+                return -4;
+            }
+            prnt("✅ [MIC_INPUT] Audio session category set to PlayAndRecord");
+            
+            // Set mode to Default for maximum compatibility with Bluetooth devices
+            // Default mode maintains full volume and allows iOS to handle Bluetooth routing
+            BOOL modeSet = [session setMode:AVAudioSessionModeDefault error:&sessionError];
+            if (!modeSet || sessionError) {
+                pthread_mutex_unlock(&g_mic_mutex);
+                prnt_err("❌ [MIC_INPUT] Failed to set audio session mode: %s", 
+                        sessionError ? [[sessionError localizedDescription] UTF8String] : "unknown");
+                return -4;
+            }
+            prnt("✅ [MIC_INPUT] Audio session mode set to Default (full volume + Bluetooth compatibility)");
+            
+            // Activate session FIRST - Bluetooth inputs only appear after activation
+            BOOL activated = [session setActive:YES error:&sessionError];
+            if (!activated || sessionError) {
+                pthread_mutex_unlock(&g_mic_mutex);
+                prnt_err("❌ [MIC_INPUT] Failed to activate audio session: %s", 
+                        sessionError ? [[sessionError localizedDescription] UTF8String] : "unknown");
+                return -4;
+            }
+            prnt("✅ [MIC_INPUT] Audio session activated (early)");
+            
+            // Check what's currently connected (outputs)
+            AVAudioSessionRouteDescription* currentRoute = [session currentRoute];
+            prnt("🔍 [MIC_INPUT] Current audio route has %lu output(s)", 
+                (unsigned long)currentRoute.outputs.count);
+            for (AVAudioSessionPortDescription* output in currentRoute.outputs) {
+                prnt("   Output: %s (type: %s)", 
+                    [output.portName UTF8String] ?: "Unknown",
+                    [output.portType UTF8String] ?: "Unknown");
+            }
+            
+            // CRITICAL: Prefer Bluetooth input if available
+            // This ensures we use Bluetooth headphones' mic instead of iPhone's built-in mic
+            NSArray<AVAudioSessionPortDescription*>* availableInputs = [session availableInputs];
+            
+            // Debug: Log all available inputs
+            prnt("🔍 [MIC_INPUT] Found %lu available input(s)", (unsigned long)availableInputs.count);
+            for (AVAudioSessionPortDescription* port in availableInputs) {
+                prnt("   Input: %s (type: %s, UID: %s)", 
+                    [port.portName UTF8String] ?: "Unknown",
+                    [port.portType UTF8String] ?: "Unknown",
+                    [port.UID UTF8String] ?: "Unknown");
+            }
+            
+            AVAudioSessionPortDescription* bluetoothInput = nil;
+            for (AVAudioSessionPortDescription* port in availableInputs) {
+                NSString* portType = port.portType;
+                if ([portType isEqualToString:AVAudioSessionPortBluetoothHFP] ||
+                    [portType isEqualToString:AVAudioSessionPortBluetoothLE]) {
+                    bluetoothInput = port;
+                    prnt("✅ [MIC_INPUT] Found Bluetooth input: %s", [port.portName UTF8String] ?: "Unknown");
+                    break;
+                }
+            }
+            
+            // Set preferred input to Bluetooth if found
+            if (bluetoothInput) {
+                BOOL inputSet = [session setPreferredInput:bluetoothInput error:&sessionError];
+                if (inputSet && !sessionError) {
+                    prnt("✅ [MIC_INPUT] Set preferred input to Bluetooth: %s", 
+                        [bluetoothInput.portName UTF8String] ?: "Unknown");
+                } else {
+                    prnt_err("⚠️ [MIC_INPUT] Failed to set Bluetooth as preferred input: %s",
+                            sessionError ? [[sessionError localizedDescription] UTF8String] : "unknown");
+                }
+            } else {
+                // No Bluetooth input found - but check if Bluetooth output exists (A2DP only mode)
+                BOOL hasBluetoothOutput = NO;
+                for (AVAudioSessionPortDescription* output in currentRoute.outputs) {
+                    NSString* portType = output.portType;
+                    if ([portType isEqualToString:AVAudioSessionPortBluetoothA2DP] ||
+                        [portType isEqualToString:AVAudioSessionPortBluetoothLE] ||
+                        [portType isEqualToString:AVAudioSessionPortBluetoothHFP]) {
+                        hasBluetoothOutput = YES;
+                        prnt("⚠️ [MIC_INPUT] Bluetooth OUTPUT detected (%s) but no INPUT - trying to switch to HFP mode",
+                            [output.portName UTF8String] ?: "Unknown");
+                        break;
+                    }
+                }
+                
+                if (hasBluetoothOutput) {
+                    // Try to override route to Bluetooth to force HFP mode
+                    // This tells iOS we want to use Bluetooth for recording
+                    [session overrideOutputAudioPort:AVAudioSessionPortOverrideNone error:&sessionError];
+                    
+                    // Deactivate and reactivate session to force route recalculation
+                    [session setActive:NO error:nil];
+                    BOOL reactivated = [session setActive:YES error:&sessionError];
+                    if (reactivated && !sessionError) {
+                        prnt("🔄 [MIC_INPUT] Session reactivated - checking inputs again");
+                        
+                        // Check inputs again after reactivation
+                        availableInputs = [session availableInputs];
+                        prnt("🔍 [MIC_INPUT] After reactivation: %lu available input(s)", 
+                            (unsigned long)availableInputs.count);
+                        
+                        for (AVAudioSessionPortDescription* port in availableInputs) {
+                            NSString* portType = port.portType;
+                            prnt("   Input: %s (type: %s)", 
+                                [port.portName UTF8String] ?: "Unknown",
+                                [portType UTF8String] ?: "Unknown");
+                            
+                            if ([portType isEqualToString:AVAudioSessionPortBluetoothHFP] ||
+                                [portType isEqualToString:AVAudioSessionPortBluetoothLE]) {
+                                // Found it after reactivation!
+                                BOOL inputSet = [session setPreferredInput:port error:&sessionError];
+                                if (inputSet && !sessionError) {
+                                    prnt("✅ [MIC_INPUT] Set preferred input to Bluetooth (after retry): %s", 
+                                        [port.portName UTF8String] ?: "Unknown");
+                                    bluetoothInput = port;
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+                
+                if (!bluetoothInput) {
+                    prnt("⚠️ [MIC_INPUT] No Bluetooth input found - will use built-in mic");
+                }
+            }
+            
+            // Check and log current audio route (Bluetooth vs built-in)
+            // Refresh currentRoute after potential reactivation
+            currentRoute = [session currentRoute];
+            if (currentRoute) {
+                NSArray<AVAudioSessionPortDescription*>* inputs = currentRoute.inputs;
+                if (inputs.count > 0) {
+                    AVAudioSessionPortDescription* inputPort = inputs[0];
+                    NSString* portType = inputPort.portType;
+                    NSString* portName = inputPort.portName;
+                    
+                    // Store route info for query
+                    snprintf(g_current_audio_route, sizeof(g_current_audio_route), "%s", 
+                            [portName UTF8String] ?: "Unknown");
+                    
+                    // Check if Bluetooth
+                    if ([portType isEqualToString:AVAudioSessionPortBluetoothHFP] ||
+                        [portType isEqualToString:AVAudioSessionPortBluetoothA2DP] ||
+                        [portType isEqualToString:AVAudioSessionPortBluetoothLE]) {
+                        g_is_bluetooth_input = 1;
+                        prnt("🎧 [MIC_INPUT] Using Bluetooth microphone: %s", g_current_audio_route);
+                    } else if ([portType isEqualToString:AVAudioSessionPortBuiltInMic]) {
+                        g_is_bluetooth_input = 0;
+                        prnt("📱 [MIC_INPUT] Using built-in iPhone microphone");
+                    } else {
+                        g_is_bluetooth_input = 0;
+                        prnt("🎤 [MIC_INPUT] Using microphone: %s (%s)", 
+                            [portName UTF8String] ?: "Unknown",
+                            [portType UTF8String] ?: "Unknown");
+                    }
+                } else {
+                    g_is_bluetooth_input = 0;
+                    prnt("⚠️ [MIC_INPUT] No input ports detected");
+                }
+            }
+            
+        } @catch (NSException* e) {
+            pthread_mutex_unlock(&g_mic_mutex);
+            prnt_err("❌ [MIC_INPUT] Exception configuring audio session: %s", [[e reason] UTF8String]);
+            return -4;
+        }
+        
+        // Now create audio engine with session configured
+        g_audio_engine = [[AVAudioEngine alloc] init];
+        if (!g_audio_engine) {
+            pthread_mutex_unlock(&g_mic_mutex);
+            prnt_err("❌ [MIC_INPUT] Failed to create AVAudioEngine");
+            return -3;
+        }
+        prnt("✅ [MIC_INPUT] AVAudioEngine created");
+        
+        g_input_node = [g_audio_engine inputNode];
+        if (!g_input_node) {
+            g_audio_engine = nil;
+            pthread_mutex_unlock(&g_mic_mutex);
+            prnt_err("❌ [MIC_INPUT] Failed to get input node");
+            return -3;
+        }
+        prnt("✅ [MIC_INPUT] Input node obtained");
+        
+        // Register for audio route change notifications (Bluetooth connect/disconnect)
+        [[NSNotificationCenter defaultCenter] addObserverForName:AVAudioSessionRouteChangeNotification
+                                                           object:nil
+                                                            queue:nil
+                                                       usingBlock:^(NSNotification* notification) {
+            handle_audio_route_change(notification);
+        }];
+        prnt("✅ [MIC_INPUT] Registered for audio route change notifications");
+    } else {
+        prnt("✅ [MIC_INPUT] Reusing existing AVAudioEngine (already created)");
+    }
+    
+    // Use the input node's native format (this avoids format conversion crashes)
+    AVAudioFormat* inputFormat = [g_input_node outputFormatForBus:0];
+    prnt("🎙️ [MIC_INPUT] Input format: %.0f Hz, %d channels", inputFormat.sampleRate, (int)inputFormat.channelCount);
+    
+    // DEFENSIVE FIX: Remove any existing tap before installing new one
+    // This prevents error -3 when reopening microphone panel quickly
+    @try {
+        [g_input_node removeTapOnBus:0];
+        prnt("✅ [MIC_INPUT] Removed existing tap (if any) before installing new one");
+    } @catch (NSException* e) {
+        // No tap existed - that's fine, we just want to ensure it's clear
+        prnt("ℹ️ [MIC_INPUT] No existing tap to remove (expected on first start)");
+    }
+    
+    // Install tap on input node using native format
+    @try {
+    [g_input_node installTapOnBus:0 bufferSize:1024 format:inputFormat block:^(AVAudioPCMBuffer* buffer, AVAudioTime* when) {
+        // This runs on audio thread - must be fast and thread-safe
+        pthread_mutex_lock(&g_mic_mutex);
+        
+        if (!g_is_active) {
+            pthread_mutex_unlock(&g_mic_mutex);
+            return;
+        }
+        
+        // Safely get audio data - check if floatChannelData is available
+        if (!buffer.floatChannelData || buffer.frameLength == 0) {
+            pthread_mutex_unlock(&g_mic_mutex);
+            return;
+        }
+        
+        // Get audio data (handle mono/stereo)
+        float* leftChannel = buffer.floatChannelData[0];
+        float* rightChannel = (buffer.format.channelCount > 1) ? buffer.floatChannelData[1] : leftChannel;
+        
+        int frameCount = (int)buffer.frameLength;
+        
+        // Write interleaved stereo to circular buffer
+        for (int i = 0; i < frameCount; i++) {
+            g_mic_buffer[g_mic_write_pos++] = leftChannel[i];
+            g_mic_buffer[g_mic_write_pos++] = rightChannel[i];
+            
+            if (g_mic_write_pos >= MIC_BUFFER_SIZE) {
+                g_mic_write_pos = 0;
+            }
+            
+            // Check for buffer overrun (write catching up to read)
+            if (g_mic_write_pos == g_mic_read_pos) {
+                // Buffer full - advance read pointer to make space
+                g_mic_read_pos += 2;
+                if (g_mic_read_pos >= MIC_BUFFER_SIZE) {
+                    g_mic_read_pos = 0;
+                }
+            }
+        }
+        
+        pthread_mutex_unlock(&g_mic_mutex);
+    }];
+    
+    } @catch (NSException* e) {
+        pthread_mutex_unlock(&g_mic_mutex);
+        prnt_err("❌ [MIC_INPUT] Exception installing tap: %s", [[e reason] UTF8String]);
+        return -3;
+    }
+    
+    // Start audio engine (only if not already running - it stays running after first start)
+    if (![g_audio_engine isRunning]) {
+        NSError* error = nil;
+        BOOL success = NO;
+        @try {
+            success = [g_audio_engine startAndReturnError:&error];
+        } @catch (NSException* e) {
+            [g_input_node removeTapOnBus:0];
+            pthread_mutex_unlock(&g_mic_mutex);
+            prnt_err("❌ [MIC_INPUT] Exception starting audio engine: %s", [[e reason] UTF8String]);
+            return -3;
+        }
+        
+        if (!success || error) {
+            [g_input_node removeTapOnBus:0];
+            pthread_mutex_unlock(&g_mic_mutex);
+            prnt_err("❌ [MIC_INPUT] Failed to start audio engine: %s", error ? [[error localizedDescription] UTF8String] : "unknown error");
+            return -3;
+        }
+        prnt("✅ [MIC_INPUT] Audio engine started (first time)");
+    } else {
+        prnt("✅ [MIC_INPUT] Audio engine already running - instant activation!");
+    }
+    
+    g_is_active = 1;
+    pthread_mutex_unlock(&g_mic_mutex);
+    
+    prnt("✅ [MIC_INPUT] Microphone capture started");
+    return 0;
+}
+
+// Stop capturing microphone input
+void mic_input_stop(void) {
+    pthread_mutex_lock(&g_mic_mutex);
+    
+    if (!g_is_active) {
+        pthread_mutex_unlock(&g_mic_mutex);
+        prnt("⚠️ [MIC_INPUT] Stop called but not active");
+        return;
+    }
+    
+    prnt("⏹️ [MIC_INPUT] Stopping microphone capture");
+    
+    g_is_active = 0;
+    
+    // Remove tap to stop capturing data
+    @try {
+        if (g_input_node) {
+            [g_input_node removeTapOnBus:0];
+            prnt("✅ [MIC_INPUT] Tap removed");
+        } else {
+            prnt("⚠️ [MIC_INPUT] Input node is nil - cannot remove tap");
+        }
+    } @catch (NSException* e) {
+        prnt_err("⚠️ [MIC_INPUT] Exception removing tap: %s", [[e reason] UTF8String]);
+        // Even if removal fails, continue cleanup
+    }
+    
+    // PERFORMANCE FIX: Keep AVAudioEngine RUNNING for instant restart
+    // Don't call [g_audio_engine stop] - stopping/starting is expensive (~1 sec)
+    // The engine stays warm and ready, we just stopped the tap (no data capture)
+    // This eliminates the delay when re-enabling microphone
+    prnt("✅ [MIC_INPUT] Engine kept running (tap removed, no data capture)");
+    
+    // CRITICAL: Reset audio session mode to Default to restore full volume
+    // VoiceChat mode reduces output by ~50% which affects music playback quality
+    @try {
+        AVAudioSession* session = [AVAudioSession sharedInstance];
+        NSError* sessionError = nil;
+        BOOL modeSet = [session setMode:AVAudioSessionModeDefault error:&sessionError];
+        if (modeSet && !sessionError) {
+            prnt("✅ [MIC_INPUT] Audio session mode reset to Default (full volume restored)");
+        } else {
+            prnt_err("⚠️ [MIC_INPUT] Failed to reset audio session mode: %s",
+                    sessionError ? [[sessionError localizedDescription] UTF8String] : "unknown");
+        }
+    } @catch (NSException* e) {
+        prnt_err("⚠️ [MIC_INPUT] Exception resetting audio mode: %s", [[e reason] UTF8String]);
+    }
+    
+    // Clear buffer
+    g_mic_write_pos = 0;
+    g_mic_read_pos = 0;
+    
+    pthread_mutex_unlock(&g_mic_mutex);
+    
+    prnt("✅ [MIC_INPUT] Microphone capture stopped (engine still running for instant restart)");
+}
+
+// Check if microphone is currently active
+int mic_input_is_active(void) {
+    return g_is_active;
+}
+
+// Get current audio level (RMS) for visualization
+// Returns: value 0.0 - 1.0
+float mic_input_get_level(void) {
+    if (!g_is_active) return 0.0f;
+    
+    pthread_mutex_lock(&g_mic_mutex);
+    
+    // Calculate RMS of recent samples
+    float sumSquares = 0.0f;
+    int sampleCount = 0;
+    const int maxSamples = 2048; // About 21ms at 48kHz
+    
+    int readPos = g_mic_write_pos - maxSamples * 2; // stereo
+    if (readPos < 0) readPos += MIC_BUFFER_SIZE;
+    
+    for (int i = 0; i < maxSamples * 2 && sampleCount < maxSamples; i += 2) {
+        int pos = (readPos + i) % MIC_BUFFER_SIZE;
+        float sample = g_mic_buffer[pos];
+        sumSquares += sample * sample;
+        sampleCount++;
+    }
+    
+    pthread_mutex_unlock(&g_mic_mutex);
+    
+    if (sampleCount == 0) return 0.0f;
+    
+    float rms = sqrtf(sumSquares / sampleCount);
+    // Clamp to 0-1 range (RMS is typically 0-0.5 for normal audio)
+    return fminf(rms * 2.0f, 1.0f);
+}
+
+// Set microphone input volume (0.0 - 1.0)
+void mic_input_set_volume(float volume) {
+    pthread_mutex_lock(&g_mic_mutex);
+    g_mic_volume = fmaxf(0.0f, fminf(1.0f, volume)); // Clamp to 0-1
+    pthread_mutex_unlock(&g_mic_mutex);
+    prnt("🎚️ [MIC_INPUT] Microphone volume set to %.2f", g_mic_volume);
+}
+
+// Get microphone input volume (0.0 - 1.0)
+float mic_input_get_volume(void) {
+    pthread_mutex_lock(&g_mic_mutex);
+    float volume = g_mic_volume;
+    pthread_mutex_unlock(&g_mic_mutex);
+    return volume;
+}
+
+// Check if currently using Bluetooth microphone
+// Returns: 1 if Bluetooth, 0 if built-in or other
+int mic_input_is_bluetooth(void) {
+    return g_is_bluetooth_input;
+}
+
+// Get current audio input route name (e.g., "AirPods Pro", "iPhone Microphone")
+// buffer: destination buffer for route name
+// buffer_size: size of destination buffer
+// Returns: 0 on success, -1 on error
+int mic_input_get_route_name(char* buffer, int buffer_size) {
+    if (!buffer || buffer_size <= 0) return -1;
+    
+    pthread_mutex_lock(&g_mic_mutex);
+    strncpy(buffer, g_current_audio_route, buffer_size - 1);
+    buffer[buffer_size - 1] = '\0';
+    pthread_mutex_unlock(&g_mic_mutex);
+    
+    return 0;
+}
+
+// Read microphone frames for audio callback
+int mic_input_read_frames(float* buffer, int frame_count) {
+    if (!g_is_active || !buffer || frame_count <= 0) {
+        // Fill with silence if not active
+        if (buffer && frame_count > 0) {
+            memset(buffer, 0, frame_count * 2 * sizeof(float));
+        }
+        return 0;
+    }
+    
+    pthread_mutex_lock(&g_mic_mutex);
+    
+    int frames_read = 0;
+    int samples_needed = frame_count * 2; // stereo
+    float volume = g_mic_volume; // Cache volume for this call
+    
+    for (int i = 0; i < samples_needed; i++) {
+        if (g_mic_read_pos == g_mic_write_pos) {
+            // Buffer empty - fill rest with silence
+            for (int j = i; j < samples_needed; j++) {
+                buffer[j] = 0.0f;
+            }
+            break;
+        }
+        
+        // Apply volume when reading from buffer
+        buffer[i] = g_mic_buffer[g_mic_read_pos++] * volume;
+        if (g_mic_read_pos >= MIC_BUFFER_SIZE) {
+            g_mic_read_pos = 0;
+        }
+        
+        if (i % 2 == 1) {
+            frames_read++;
+        }
+    }
+    
+    pthread_mutex_unlock(&g_mic_mutex);
+    
+    return frames_read;
+}
+
+// Cleanup microphone input system (called on app shutdown)
+void mic_input_cleanup(void) {
+    pthread_mutex_lock(&g_mic_mutex);
+    
+    if (!g_is_initialized) {
+        pthread_mutex_unlock(&g_mic_mutex);
+        return;
+    }
+    
+    prnt("🧹 [MIC_INPUT] Cleaning up microphone input system (app shutdown)");
+    
+    if (g_is_active) {
+        g_is_active = 0;
+        @try {
+            if (g_input_node) {
+                [g_input_node removeTapOnBus:0];
+                prnt("✅ [MIC_INPUT] Tap removed during cleanup");
+            }
+        } @catch (NSException* e) {
+            prnt_err("⚠️ [MIC_INPUT] Exception removing tap during cleanup: %s", [[e reason] UTF8String]);
+            // Continue cleanup even if tap removal fails
+        }
+    }
+    
+    // Unregister route change notifications
+    [[NSNotificationCenter defaultCenter] removeObserver:nil 
+                                                    name:AVAudioSessionRouteChangeNotification 
+                                                  object:nil];
+    prnt("✅ [MIC_INPUT] Unregistered audio route notifications");
+    
+    // Now we actually stop and destroy the engine (this is final cleanup)
+    if ([g_audio_engine isRunning]) {
+        [g_audio_engine stop];
+        prnt("✅ [MIC_INPUT] Engine stopped for app shutdown");
+    }
+    
+    g_audio_engine = nil;
+    g_input_node = nil;
+    g_is_initialized = 0;
+    
+    pthread_mutex_unlock(&g_mic_mutex);
+    
+    prnt("✅ [MIC_INPUT] Cleanup complete (engine destroyed)");
+}
+
+// Handle audio route changes (Bluetooth connect/disconnect, headphone plug/unplug)
+static void handle_audio_route_change(NSNotification* notification) {
+    @try {
+        NSDictionary* userInfo = notification.userInfo;
+        NSNumber* reasonValue = userInfo[AVAudioSessionRouteChangeReasonKey];
+        AVAudioSessionRouteChangeReason reason = (AVAudioSessionRouteChangeReason)[reasonValue unsignedIntegerValue];
+        
+        const char* reasonStr = "Unknown";
+        switch (reason) {
+            case AVAudioSessionRouteChangeReasonNewDeviceAvailable:
+                reasonStr = "New Device Available (Bluetooth/Headphones connected)";
+                break;
+            case AVAudioSessionRouteChangeReasonOldDeviceUnavailable:
+                reasonStr = "Device Unavailable (Bluetooth/Headphones disconnected)";
+                break;
+            case AVAudioSessionRouteChangeReasonCategoryChange:
+                reasonStr = "Category Change";
+                break;
+            case AVAudioSessionRouteChangeReasonOverride:
+                reasonStr = "Route Override";
+                break;
+            case AVAudioSessionRouteChangeReasonWakeFromSleep:
+                reasonStr = "Wake From Sleep";
+                break;
+            default:
+                reasonStr = "Other";
+                break;
+        }
+        
+        prnt("🔄 [MIC_INPUT] Audio route changed: %s", reasonStr);
+        
+        // If Bluetooth device became available, prefer it as input
+        if (reason == AVAudioSessionRouteChangeReasonNewDeviceAvailable) {
+            AVAudioSession* session = [AVAudioSession sharedInstance];
+            NSArray<AVAudioSessionPortDescription*>* availableInputs = [session availableInputs];
+            
+            for (AVAudioSessionPortDescription* port in availableInputs) {
+                NSString* portType = port.portType;
+                if ([portType isEqualToString:AVAudioSessionPortBluetoothHFP] ||
+                    [portType isEqualToString:AVAudioSessionPortBluetoothLE]) {
+                    NSError* error = nil;
+                    BOOL inputSet = [session setPreferredInput:port error:&error];
+                    if (inputSet && !error) {
+                        prnt("✅ [MIC_INPUT] Switched to Bluetooth input: %s", [port.portName UTF8String] ?: "Unknown");
+                        
+                        // Update route info
+                        snprintf(g_current_audio_route, sizeof(g_current_audio_route), "%s", 
+                                [port.portName UTF8String] ?: "Unknown");
+                        g_is_bluetooth_input = 1;
+                    } else {
+                        prnt_err("⚠️ [MIC_INPUT] Failed to switch to Bluetooth: %s",
+                                error ? [[error localizedDescription] UTF8String] : "unknown");
+                    }
+                    break;
+                }
+            }
+        }
+        
+        // Log current route after change
+        AVAudioSession* session = [AVAudioSession sharedInstance];
+        AVAudioSessionRouteDescription* currentRoute = [session currentRoute];
+        if (currentRoute && currentRoute.inputs.count > 0) {
+            AVAudioSessionPortDescription* inputPort = currentRoute.inputs[0];
+            NSString* portType = inputPort.portType;
+            NSString* portName = inputPort.portName;
+            
+            // Update stored route info
+            snprintf(g_current_audio_route, sizeof(g_current_audio_route), "%s", 
+                    [portName UTF8String] ?: "Unknown");
+            
+            if ([portType isEqualToString:AVAudioSessionPortBluetoothHFP] ||
+                [portType isEqualToString:AVAudioSessionPortBluetoothA2DP] ||
+                [portType isEqualToString:AVAudioSessionPortBluetoothLE]) {
+                g_is_bluetooth_input = 1;
+                prnt("🎧 [MIC_INPUT] Now using Bluetooth: %s", g_current_audio_route);
+            } else if ([portType isEqualToString:AVAudioSessionPortBuiltInMic]) {
+                g_is_bluetooth_input = 0;
+                prnt("📱 [MIC_INPUT] Now using built-in iPhone mic");
+            } else {
+                g_is_bluetooth_input = 0;
+                prnt("🎤 [MIC_INPUT] Now using: %s (%s)", 
+                    [portName UTF8String] ?: "Unknown",
+                    [portType UTF8String] ?: "Unknown");
+            }
+        }
+    } @catch (NSException* e) {
+        prnt_err("❌ [MIC_INPUT] Exception handling route change: %s", [[e reason] UTF8String]);
+    }
+}
+
+// Enable/disable echo cancellation
+// When enabled, iOS will digitally remove speaker output from microphone input
+void mic_input_set_echo_cancellation(int enabled) {
+    if (!g_is_initialized) {
+        prnt_err("❌ [MIC_INPUT] Cannot set echo cancellation - not initialized");
+        return;
+    }
+    
+    @try {
+        AVAudioSession* session = [AVAudioSession sharedInstance];
+        NSError* error = nil;
+        
+        if (enabled) {
+            // Enable AEC: Switch to VoiceChat mode (removes speaker output from mic)
+            BOOL modeSet = [session setMode:AVAudioSessionModeVoiceChat error:&error];
+            if (modeSet && !error) {
+                prnt("✅ [MIC_INPUT] Echo cancellation ENABLED (VoiceChat mode)");
+            } else {
+                prnt_err("❌ [MIC_INPUT] Failed to enable echo cancellation: %s",
+                        error ? [[error localizedDescription] UTF8String] : "unknown");
+            }
+        } else {
+            // Disable AEC: Return to Default mode (natural mic input)
+            BOOL modeSet = [session setMode:AVAudioSessionModeDefault error:&error];
+            if (modeSet && !error) {
+                prnt("✅ [MIC_INPUT] Echo cancellation DISABLED (Default mode)");
+            } else {
+                prnt_err("❌ [MIC_INPUT] Failed to disable echo cancellation: %s",
+                        error ? [[error localizedDescription] UTF8String] : "unknown");
+            }
+        }
+    } @catch (NSException* e) {
+        prnt_err("❌ [MIC_INPUT] Exception setting echo cancellation: %s", [[e reason] UTF8String]);
+    }
+}
+
+// Check if headphones (wired or Bluetooth) are connected
+// Returns: 1 if headphones connected, 0 if using built-in speaker/mic
+int mic_input_is_headphones_connected(void) {
+    @try {
+        AVAudioSession* session = [AVAudioSession sharedInstance];
+        AVAudioSessionRouteDescription* route = [session currentRoute];
+        
+        // Check all outputs for headphones
+        for (AVAudioSessionPortDescription* output in route.outputs) {
+            NSString* portType = output.portType;
+            
+            // Check for headphone types
+            if ([portType isEqualToString:AVAudioSessionPortHeadphones] ||
+                [portType isEqualToString:AVAudioSessionPortBluetoothA2DP] ||
+                [portType isEqualToString:AVAudioSessionPortBluetoothLE] ||
+                [portType isEqualToString:AVAudioSessionPortBluetoothHFP]) {
+                return 1; // Headphones connected
+            }
+        }
+        
+        return 0; // No headphones (using built-in speaker)
+    } @catch (NSException* e) {
+        prnt_err("❌ [MIC_INPUT] Exception checking headphones: %s", [[e reason] UTF8String]);
+        return 0;
+    }
+}
+
+// Get number of available input devices
+int mic_input_get_available_inputs_count(void) {
+    @try {
+        AVAudioSession* session = [AVAudioSession sharedInstance];
+        
+        // CRITICAL: Ensure session is active for Bluetooth devices to be detected
+        NSError* error = nil;
+        if (![session setActive:YES error:&error]) {
+            prnt_err("⚠️ [MIC_INPUT] Failed to activate session for input detection: %s",
+                    error ? [[error localizedDescription] UTF8String] : "unknown");
+        }
+        
+        NSArray<AVAudioSessionPortDescription*>* availableInputs = [session availableInputs];
+        prnt("🔍 [MIC_INPUT] Found %lu available input(s)", (unsigned long)availableInputs.count);
+        
+        // Debug: Log all available inputs
+        for (AVAudioSessionPortDescription* port in availableInputs) {
+            prnt("   - %s (type: %s)", 
+                [port.portName UTF8String] ?: "Unknown",
+                [port.portType UTF8String] ?: "Unknown");
+        }
+        
+        return (int)availableInputs.count;
+    } @catch (NSException* e) {
+        prnt_err("❌ [MIC_INPUT] Exception getting input count: %s", [[e reason] UTF8String]);
+        return 0;
+    }
+}
+
+// Get available input device info by index
+int mic_input_get_available_input_info(int index, char* uid_buffer, int uid_buffer_size,
+                                       char* name_buffer, int name_buffer_size,
+                                       char* type_buffer, int type_buffer_size) {
+    @try {
+        AVAudioSession* session = [AVAudioSession sharedInstance];
+        
+        // CRITICAL: Ensure session is active for Bluetooth devices to be detected
+        NSError* error = nil;
+        if (![session setActive:YES error:&error]) {
+            prnt_err("⚠️ [MIC_INPUT] Failed to activate session for input info: %s",
+                    error ? [[error localizedDescription] UTF8String] : "unknown");
+        }
+        
+        NSArray<AVAudioSessionPortDescription*>* availableInputs = [session availableInputs];
+        
+        if (index < 0 || index >= availableInputs.count) {
+            return -1;
+        }
+        
+        AVAudioSessionPortDescription* port = availableInputs[index];
+        
+        if (uid_buffer && uid_buffer_size > 0) {
+            snprintf(uid_buffer, uid_buffer_size, "%s", [port.UID UTF8String] ?: "");
+        }
+        
+        if (name_buffer && name_buffer_size > 0) {
+            snprintf(name_buffer, name_buffer_size, "%s", [port.portName UTF8String] ?: "Unknown");
+        }
+        
+        if (type_buffer && type_buffer_size > 0) {
+            snprintf(type_buffer, type_buffer_size, "%s", [port.portType UTF8String] ?: "Unknown");
+        }
+        
+        return 0;
+    } @catch (NSException* e) {
+        prnt_err("❌ [MIC_INPUT] Exception getting input info: %s", [[e reason] UTF8String]);
+        return -1;
+    }
+}
+
+// Set preferred input device by UID
+int mic_input_set_preferred_input(const char* uid) {
+    @try {
+        AVAudioSession* session = [AVAudioSession sharedInstance];
+        NSArray<AVAudioSessionPortDescription*>* availableInputs = [session availableInputs];
+        
+        NSString* targetUID = [NSString stringWithUTF8String:uid];
+        
+        for (AVAudioSessionPortDescription* port in availableInputs) {
+            if ([port.UID isEqualToString:targetUID]) {
+                NSError* error = nil;
+                BOOL success = [session setPreferredInput:port error:&error];
+                
+                if (success && !error) {
+                    prnt("✅ [MIC_INPUT] Set preferred input: %s", [port.portName UTF8String] ?: "Unknown");
+                    
+                    // Update stored route info
+                    snprintf(g_current_audio_route, sizeof(g_current_audio_route), "%s",
+                            [port.portName UTF8String] ?: "Unknown");
+                    
+                    NSString* portType = port.portType;
+                    g_is_bluetooth_input = ([portType isEqualToString:AVAudioSessionPortBluetoothHFP] ||
+                                          [portType isEqualToString:AVAudioSessionPortBluetoothLE]) ? 1 : 0;
+                    
+                    return 0;
+                } else {
+                    prnt_err("❌ [MIC_INPUT] Failed to set preferred input: %s",
+                            error ? [[error localizedDescription] UTF8String] : "unknown");
+                    return -1;
+                }
+            }
+        }
+        
+        prnt_err("❌ [MIC_INPUT] Input device with UID not found: %s", uid);
+        return -1;
+    } @catch (NSException* e) {
+        prnt_err("❌ [MIC_INPUT] Exception setting preferred input: %s", [[e reason] UTF8String]);
+        return -1;
+    }
+}
+
+// Get current input device UID
+int mic_input_get_current_input_uid(char* buffer, int buffer_size) {
+    @try {
+        AVAudioSession* session = [AVAudioSession sharedInstance];
+        AVAudioSessionRouteDescription* route = [session currentRoute];
+        
+        if (route && route.inputs.count > 0) {
+            AVAudioSessionPortDescription* inputPort = route.inputs[0];
+            if (buffer && buffer_size > 0) {
+                snprintf(buffer, buffer_size, "%s", [inputPort.UID UTF8String] ?: "");
+                return 0;
+            }
+        }
+        
+        return -1;
+    } @catch (NSException* e) {
+        prnt_err("❌ [MIC_INPUT] Exception getting current input UID: %s", [[e reason] UTF8String]);
+        return -1;
+    }
+}
+
+// Get number of available output devices
+int mic_input_get_available_outputs_count(void) {
+    @try {
+        AVAudioSession* session = [AVAudioSession sharedInstance];
+        
+        // CRITICAL: Ensure session is active for Bluetooth devices to be detected
+        NSError* error = nil;
+        if (![session setActive:YES error:&error]) {
+            prnt_err("⚠️ [MIC_INPUT] Failed to activate session for output detection: %s",
+                    error ? [[error localizedDescription] UTF8String] : "unknown");
+        }
+        
+        int count = 1; // Always show built-in speaker
+        
+        // Check current route for Bluetooth outputs
+        AVAudioSessionRouteDescription* route = [session currentRoute];
+        prnt("🔍 [MIC_INPUT] Current route has %lu output(s)", (unsigned long)route.outputs.count);
+        for (AVAudioSessionPortDescription* output in route.outputs) {
+            prnt("   - %s (type: %s)", 
+                [output.portName UTF8String] ?: "Unknown",
+                [output.portType UTF8String] ?: "Unknown");
+            
+            NSString* outputType = output.portType;
+            if ([outputType isEqualToString:AVAudioSessionPortBluetoothHFP] ||
+                [outputType isEqualToString:AVAudioSessionPortBluetoothA2DP] ||
+                [outputType isEqualToString:AVAudioSessionPortBluetoothLE]) {
+                count++; // Add Bluetooth option
+                break; // Only add once
+            }
+        }
+        
+        prnt("🔍 [MIC_INPUT] Returning %d available output(s)", count);
+        return count;
+    } @catch (NSException* e) {
+        prnt_err("❌ [MIC_INPUT] Exception getting output count: %s", [[e reason] UTF8String]);
+        return 0;
+    }
+}
+
+// Get available output device info by index
+int mic_input_get_available_output_info(int index, char* uid_buffer, int uid_buffer_size,
+                                        char* name_buffer, int name_buffer_size,
+                                        char* type_buffer, int type_buffer_size) {
+    @try {
+        AVAudioSession* session = [AVAudioSession sharedInstance];
+        
+        // CRITICAL: Ensure session is active for Bluetooth devices to be detected
+        NSError* error = nil;
+        if (![session setActive:YES error:&error]) {
+            prnt_err("⚠️ [MIC_INPUT] Failed to activate session for output info: %s",
+                    error ? [[error localizedDescription] UTF8String] : "unknown");
+        }
+        
+        AVAudioSessionRouteDescription* route = [session currentRoute];
+        
+        // Index 0 is always the built-in speaker
+        if (index == 0) {
+            if (uid_buffer && uid_buffer_size > 0) {
+                snprintf(uid_buffer, uid_buffer_size, "Speaker");
+            }
+            if (name_buffer && name_buffer_size > 0) {
+                snprintf(name_buffer, name_buffer_size, "Speaker");
+            }
+            if (type_buffer && type_buffer_size > 0) {
+                snprintf(type_buffer, type_buffer_size, "%s", [AVAudioSessionPortBuiltInSpeaker UTF8String]);
+            }
+            return 0;
+        }
+        
+        // Index 1 is Bluetooth (if available)
+        if (index == 1) {
+            // First, check if there's an active Bluetooth output
+            for (AVAudioSessionPortDescription* port in route.outputs) {
+                NSString* portType = port.portType;
+                if ([portType isEqualToString:AVAudioSessionPortBluetoothA2DP] ||
+                    [portType isEqualToString:AVAudioSessionPortBluetoothHFP] ||
+                    [portType isEqualToString:AVAudioSessionPortBluetoothLE]) {
+                    
+                    if (uid_buffer && uid_buffer_size > 0) {
+                        snprintf(uid_buffer, uid_buffer_size, "%s", [port.UID UTF8String] ?: "Bluetooth");
+                    }
+                    if (name_buffer && name_buffer_size > 0) {
+                        snprintf(name_buffer, name_buffer_size, "%s", [port.portName UTF8String] ?: "Bluetooth");
+                    }
+                    if (type_buffer && type_buffer_size > 0) {
+                        snprintf(type_buffer, type_buffer_size, "%s", [port.portType UTF8String]);
+                    }
+                    return 0;
+                }
+            }
+            
+            // If no active Bluetooth output, check available inputs for paired Bluetooth device info
+            NSArray<AVAudioSessionPortDescription*>* availableInputs = [session availableInputs];
+            for (AVAudioSessionPortDescription* input in availableInputs) {
+                NSString* inputType = input.portType;
+                if ([inputType isEqualToString:AVAudioSessionPortBluetoothHFP] ||
+                    [inputType rangeOfString:@"Bluetooth"].location != NSNotFound) {
+                    
+                    if (uid_buffer && uid_buffer_size > 0) {
+                        snprintf(uid_buffer, uid_buffer_size, "%s", [input.UID UTF8String] ?: "Bluetooth");
+                    }
+                    if (name_buffer && name_buffer_size > 0) {
+                        snprintf(name_buffer, name_buffer_size, "%s", [input.portName UTF8String] ?: "Bluetooth");
+                    }
+                    if (type_buffer && type_buffer_size > 0) {
+                        // Use a generic Bluetooth type to indicate it's available but not active
+                        snprintf(type_buffer, type_buffer_size, "%s", [AVAudioSessionPortBluetoothHFP UTF8String]);
+                    }
+                    return 0;
+                }
+            }
+        }
+        
+        return -1; // Index out of range
+    } @catch (NSException* e) {
+        prnt_err("❌ [MIC_INPUT] Exception getting output info: %s", [[e reason] UTF8String]);
+        return -1;
+    }
+}
+
+// Get current output type (to determine if speaker or Bluetooth is active)
+int mic_input_get_current_output_type(char* type_buffer, int type_buffer_size) {
+    @try {
+        AVAudioSession* session = [AVAudioSession sharedInstance];
+        AVAudioSessionRouteDescription* route = [session currentRoute];
+        
+        // Check the first output (there's usually only one active)
+        if (route.outputs.count > 0) {
+            AVAudioSessionPortDescription* port = route.outputs[0];
+            if (type_buffer && type_buffer_size > 0) {
+                snprintf(type_buffer, type_buffer_size, "%s", [port.portType UTF8String] ?: "Unknown");
+            }
+            return 0;
+        }
+        
+        return -1;
+    } @catch (NSException* e) {
+        prnt_err("❌ [MIC_INPUT] Exception getting current output type: %s", [[e reason] UTF8String]);
+        return -1;
+    }
+}
+
+// Set preferred output route (override)
+int mic_input_set_output_route(const char* route_type) {
+    @try {
+        AVAudioSession* session = [AVAudioSession sharedInstance];
+        NSError* error = nil;
+        
+        if (strcmp(route_type, "speaker") == 0) {
+            // Force speaker output
+            [session overrideOutputAudioPort:AVAudioSessionPortOverrideSpeaker error:&error];
+            prnt("✅ [MIC_INPUT] Set output route to: Speaker");
+        } else if (strcmp(route_type, "default") == 0 || strcmp(route_type, "bluetooth") == 0) {
+            // Use default routing (will use Bluetooth if available)
+            [session overrideOutputAudioPort:AVAudioSessionPortOverrideNone error:&error];
+            prnt("✅ [MIC_INPUT] Set output route to: Default (Bluetooth if available)");
+        } else {
+            prnt_err("❌ [MIC_INPUT] Unknown route type: %s", route_type);
+            return -1;
+        }
+        
+        if (error) {
+            prnt_err("❌ [MIC_INPUT] Failed to set output route: %s",
+                    [[error localizedDescription] UTF8String]);
+            return -1;
+        }
+        
+        return 0;
+    } @catch (NSException* e) {
+        prnt_err("❌ [MIC_INPUT] Exception setting output route: %s", [[e reason] UTF8String]);
+        return -1;
+    }
+}
+
+#else
+// Android/other platforms - stub implementation
+int mic_input_init(void) { return -1; }
+int mic_input_start(void) { return -1; }
+void mic_input_stop(void) {}
+int mic_input_is_active(void) { return 0; }
+float mic_input_get_level(void) { return 0.0f; }
+int mic_input_read_frames(float* buffer, int frame_count) {
+    if (buffer && frame_count > 0) {
+        memset(buffer, 0, frame_count * 2 * sizeof(float));
+    }
+    return 0;
+}
+void mic_input_set_volume(float volume) {}
+float mic_input_get_volume(void) { return 1.0f; }
+int mic_input_is_bluetooth(void) { return 0; }
+int mic_input_get_route_name(char* buffer, int buffer_size) {
+    if (buffer && buffer_size > 0) {
+        strncpy(buffer, "Unknown", buffer_size - 1);
+        buffer[buffer_size - 1] = '\0';
+    }
+    return -1;
+}
+void mic_input_set_echo_cancellation(int enabled) {}
+int mic_input_is_headphones_connected(void) { return 0; }
+int mic_input_get_available_inputs_count(void) { return 0; }
+int mic_input_get_available_input_info(int index, char* uid_buffer, int uid_buffer_size,
+                                       char* name_buffer, int name_buffer_size,
+                                       char* type_buffer, int type_buffer_size) { return -1; }
+int mic_input_set_preferred_input(const char* uid) { return -1; }
+int mic_input_get_current_input_uid(char* buffer, int buffer_size) { return -1; }
+int mic_input_get_available_outputs_count(void) { return 0; }
+int mic_input_get_available_output_info(int index, char* uid_buffer, int uid_buffer_size,
+                                        char* name_buffer, int name_buffer_size,
+                                        char* type_buffer, int type_buffer_size) { return -1; }
+int mic_input_set_output_route(const char* route_type) { return -1; }
+void mic_input_cleanup(void) {}
+#endif

@@ -304,14 +304,6 @@ class _SampleBanksWidgetState extends State<SampleBanksWidget> {
     return Color.lerp(originalColor, AppColors.sequencerCellFilled, 0.3) ?? AppColors.sequencerCellFilled;
   }
 
-  Color _getBorderColor(bool isSelected, bool isActive) {
-    return AppColors.sequencerBorder;
-  }
-
-  double _getBorderWidth(bool isSelected, bool isActive) {
-    return 0.5;
-  }
-
   List<BoxShadow>? _getBoxShadow(bool isSelected, bool isActive) {
     if (isSelected) {
       return null;
@@ -399,4 +391,4 @@ class _ArrowTile extends StatelessWidget {
       ),
     );
   }
-} 
+}

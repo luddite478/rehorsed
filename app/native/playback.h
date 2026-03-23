@@ -156,6 +156,8 @@ void playback_set_master_volume(float volume01);
 __attribute__((visibility("default"))) __attribute__((used))
 void playback_set_enhanced_logging(int enabled);
 
+// NOTE: sv_audio_callback2 bypass functions removed - mic bypasses SunVox entirely now
+
 // Volume smoothing configuration
 __attribute__((visibility("default"))) __attribute__((used))
 void playback_set_smoothing_rise_time(float ms);
@@ -215,6 +217,9 @@ void recording_stop(void);
 
 __attribute__((visibility("default"))) __attribute__((used))
 int recording_is_active(void);
+
+// NOTE: Mic-only recording functions removed - mic recording now writes raw mic directly to WAV
+// See docs/features/microphone_dual_output_architecture.md for archived approach
 
 #ifdef __cplusplus
 }

@@ -202,23 +202,23 @@ To continue debugging, we need:
 ## Files Modified So Far
 
 ### Native (C++)
-- `/Users/romansmirnov/projects/fortuned/app/native/table.mm`
+- `/Users/romansmirnov/projects/rehorsed/app/native/table.mm`
   - Added `table_recompute_section_starts()` helper (lines 53-71)
   - Updated 7 functions to call the helper after section modifications
   - Added verbose logging to track recompute operations
 
 ### Flutter (Dart)
-- `/Users/romansmirnov/projects/fortuned/app/lib/screens/sequencer_settings_screen.dart`
+- `/Users/romansmirnov/projects/rehorsed/app/lib/screens/sequencer_settings_screen.dart`
   - Added Project Information section showing project ID and name
   - Added copy button for Project ID
   - Organized developer settings section
 
 ### Documentation
-- `/Users/romansmirnov/projects/fortuned/app/docs/bugs/SECTION_GAP_BUG_ANALYSIS.md`
+- `/Users/romansmirnov/projects/rehorsed/app/docs/bugs/SECTION_GAP_BUG_ANALYSIS.md`
   - Complete root cause analysis
   - Updated status to reflect ongoing investigation
 
-- `/Users/romansmirnov/projects/fortuned/app/docs/bugs/SECTION_GAP_CURRENT_STATE.md` (this file)
+- `/Users/romansmirnov/projects/rehorsed/app/docs/bugs/SECTION_GAP_CURRENT_STATE.md` (this file)
   - Current state and investigation plan
 
 ---

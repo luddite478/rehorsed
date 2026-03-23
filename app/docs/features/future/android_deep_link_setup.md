@@ -84,7 +84,7 @@ export ANDROID_SHA256_FINGERPRINT="ABCDEF1234567890ABCDEF1234567890ABCDEF1234567
      "relation": ["delegate_permission/common.handle_all_urls"],
      "target": {
        "namespace": "android_app",
-       "package_name": "com.example.fortuned",
+       "package_name": "com.example.rehorsed",
        "sha256_cert_fingerprints": ["AB:CD:EF:12:34:56:..."]
      }
    }]
@@ -103,7 +103,7 @@ export ANDROID_SHA256_FINGERPRINT="ABCDEF1234567890ABCDEF1234567890ABCDEF1234567
    # Then open a deep link
    adb shell am start -W -a android.intent.action.VIEW \
      -d "https://yourdomain.com/join/thread123" \
-     com.example.fortuned
+     com.example.rehorsed
    ```
 
 ## Troubleshooting
@@ -134,7 +134,7 @@ For different environments, you'll need:
 
 The server automatically generates the `assetlinks.json` file at runtime using:
 - `ANDROID_SHA256_FINGERPRINT` environment variable
-- Package name: `com.example.fortuned` (hardcoded in `server/app/http_api/deep_links.py`)
+- Package name: `com.example.rehorsed` (hardcoded in `server/app/http_api/deep_links.py`)
 
 See `server/app/http_api/deep_links.py` for the implementation.
 

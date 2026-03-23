@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_svg/flutter_svg.dart';
 import '../utils/app_colors.dart';
 import '../screens/library_screen.dart';
 
@@ -23,14 +22,18 @@ class SimplifiedHeaderWidget extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          // Left side - App icon
-          SvgPicture.asset(
-            'icons/app_icon.svg',
-            width: 40,
-            height: 40,
-            fit: BoxFit.contain,
+          Transform.scale(
+            alignment: Alignment.centerLeft,
+            scale: 1.55,
+            child: Image.asset(
+              'icons/rehorsed_transp_3.png',
+              width: 40,
+              height: 40,
+              fit: BoxFit.contain,
+              filterQuality: FilterQuality.high,
+            ),
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 2),
           
           // Spacer
           const Expanded(

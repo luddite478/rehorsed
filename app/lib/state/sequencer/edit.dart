@@ -23,7 +23,11 @@ class EditState extends ChangeNotifier {
   // Jump insert state
   bool _isStepInsertMode = false;
   int _stepInsertSize = 0;
-  
+
+  // Cached result of getSelectedCellsWithSameSample — invalidated when selection changes
+  ({int sampleSlot, int selectedStep, int selectedCol, List<({int step, int col})> cells})? _sameSampleCache;
+  bool _sameSampleCacheDirty = true;
+
   // Value notifiers for UI binding
   final ValueNotifier<bool> isInSelectionModeNotifier = ValueNotifier<bool>(false);
   final ValueNotifier<Set<int>> selectedCellsNotifier = ValueNotifier<Set<int>>(<int>{});
@@ -75,6 +79,7 @@ class EditState extends ChangeNotifier {
     _selectedCells
       ..clear()
       ..addAll(next);
+    _sameSampleCacheDirty = true;
     if (anchor != null) {
       _lastSelectedCell = anchor;
     }
@@ -94,8 +99,17 @@ class EditState extends ChangeNotifier {
 
   void toggleSelectionMode() {
     _isInSelectionMode = !_isInSelectionMode;
-    if (!_isInSelectionMode) {
-      clearSelection();
+    if (!_isInSelectionMode && _selectedCells.isNotEmpty) {
+      final tableCols = _selectionTableCols > 0 ? _selectionTableCols : _tableState.getVisibleCols().length;
+      var minRow = _selectedCells.first ~/ tableCols;
+      var minCol = _selectedCells.first % tableCols;
+      for (final i in _selectedCells) {
+        final r = i ~/ tableCols;
+        final c = i % tableCols;
+        if (r < minRow) minRow = r;
+        if (c < minCol) minCol = c;
+      }
+      selectSingleCell(minRow * tableCols + minCol);
     }
     
     isInSelectionModeNotifier.value = _isInSelectionMode;
@@ -150,6 +164,52 @@ class EditState extends ChangeNotifier {
     debugPrint('✂️ [EDIT] Selected all cells: ${_selectedCells.length}');
   }
   
+  /// Returns (sampleSlot, selectedStep, selectedCol, list of (step, col)) for all cells
+  /// in the entire song that share the sample of the selected cell. Returns null if
+  /// selection is empty or selected cell has no sample. Result is cached until selection changes.
+  ({int sampleSlot, int selectedStep, int selectedCol, List<({int step, int col})> cells})? getSelectedCellsWithSameSample() {
+    if (_selectedCells.isEmpty) return null;
+
+    if (!_sameSampleCacheDirty && _sameSampleCache != null) {
+      return _sameSampleCache;
+    }
+    _sameSampleCacheDirty = false;
+
+    final tableCols = _selectionTableCols > 0 ? _selectionTableCols : _tableState.getVisibleCols().length;
+    final sectionStart = _tableState.getSectionStartStep(_tableState.uiSelectedSection);
+    final layerStart = _tableState.getLayerStartCol(_tableState.uiSelectedLayer);
+
+    // Get the selected cell's absolute position and sample slot
+    final cellIndex = _selectedCells.first;
+    final row = cellIndex ~/ tableCols;
+    final col = cellIndex % tableCols;
+    final selectedStep = sectionStart + row;
+    final selectedCol = layerStart + col;
+    final cellPtr = _tableState.getCellPointer(selectedStep, selectedCol);
+    if (cellPtr.address == 0) { _sameSampleCache = null; return null; }
+    final cellData = CellData.fromPointer(cellPtr);
+    if (!cellData.isNotEmpty || cellData.sampleSlot < 0) { _sameSampleCache = null; return null; }
+    final targetSlot = cellData.sampleSlot;
+
+    // Scan the entire song for cells with the same sample
+    final maxSteps = _tableState.maxSteps;
+    final maxCols = _tableState.maxCols;
+    final List<({int step, int col})> cells = [];
+    for (var s = 0; s < maxSteps; s++) {
+      for (var c = 0; c < maxCols; c++) {
+        final cellP = _tableState.getCellPointer(s, c);
+        if (cellP.address == 0) continue;
+        final cd = CellData.fromPointer(cellP);
+        if (cd.isNotEmpty && cd.sampleSlot == targetSlot) {
+          cells.add((step: s, col: c));
+        }
+      }
+    }
+    if (cells.isEmpty) { _sameSampleCache = null; return null; }
+    _sameSampleCache = (sampleSlot: targetSlot, selectedStep: selectedStep, selectedCol: selectedCol, cells: cells);
+    return _sameSampleCache;
+  }
+
   // Clipboard methods
   void copyCells() {
     if (_selectedCells.isEmpty) return;
@@ -259,11 +319,13 @@ class EditState extends ChangeNotifier {
     notifyListeners();
     debugPrint('📋 [EDIT] Pasted ${_clipboardData.length} cells');
 
-    // Jump insert: after pasting, move selection down by configured cells
+    // Jump insert: after pasting, move selection down by configured cells.
+    // Wrap to the first step of the next cycle when exceeding section bounds
+    // (e.g. 16 steps + jump 2: at step 14, next is step 0, not step 15).
     if (_isStepInsertMode) {
       final tableColsAfter = _tableState.getVisibleCols().length;
       final maxRows = _tableState.getSectionStepCount(_tableState.uiSelectedSection);
-      final nextBaseRow = (baseRow + _stepInsertSize).clamp(0, maxRows - 1);
+      final nextBaseRow = (baseRow + _stepInsertSize) % maxRows;
       final nextIndex = nextBaseRow * tableColsAfter + baseCol;
       selectSingleCell(nextIndex);
       debugPrint('🔗 [EDIT] Jumped selection by $_stepInsertSize cells to row $nextBaseRow');

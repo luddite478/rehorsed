@@ -262,9 +262,8 @@ class _SimplifiedSoundGridState extends State<SimplifiedSoundGrid> {
     final sampleBrowser = Provider.of<SampleBrowserState>(context, listen: false);
     
     if (isEmpty) {
-      // Show sample browser to select a sample for this cell
-      sampleBrowser.showForCell(step, col);
-      debugPrint('🎯 Opening sample browser for empty cell [$step, $col]');
+      sampleBrowser.showForCell(step, col, bankSlot: sampleBank.activeSlot);
+      debugPrint('🎯 Opening sample browser for empty cell [$step, $col] slot=${sampleBank.activeSlot}');
     } else {
       // Remove sample from cell
       tableState.clearCell(step, col);

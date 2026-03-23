@@ -1,13 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'sound_grid_widget.dart';
-import 'sample_selection_widget.dart';
 import 'sound_grid_side_control_widget.dart';
 import 'section_creation_overlay.dart';
-import 'sequencer_body_overlay_menu.dart';
 import '../../../state/sequencer/table.dart';
 import '../../../state/sequencer/playback.dart';
-import '../../../state/sequencer/sample_browser.dart';
 import '../../../state/sequencer/edit.dart';
 import '../../../state/sequencer/section_settings.dart';
 import '../../../utils/app_colors.dart';
@@ -20,7 +17,16 @@ enum SequencerBodyMode {
 }
 
 class SequencerBody extends StatefulWidget {
-  const SequencerBody({super.key});
+  final VoidCallback? onBack;
+  final VoidCallback? onSettings;
+  final VoidCallback? onRecordings;
+
+  const SequencerBody({
+    super.key,
+    this.onBack,
+    this.onSettings,
+    this.onRecordings,
+  });
 
   // 🎯 SIZING CONFIGURATION - Easy to control layout proportions
   static const double sideControlWidthPercent = 8.0; // Left side control takes 8% of total width
@@ -53,9 +59,8 @@ class _SequencerBodyState extends State<SequencerBody> {
 
   @override
   Widget build(BuildContext context) {
-    return Selector3<TableState, PlaybackState, SampleBrowserState, ({bool isBodyBrowserOpen, bool isSectionControlOpen, bool isSectionCreationOpen, int numSections, int currentIndex})>(
-      selector: (context, tableState, playbackState, sampleBrowserState) => (
-        isBodyBrowserOpen: sampleBrowserState.isVisible,
+    return Selector2<TableState, PlaybackState, ({bool isSectionControlOpen, bool isSectionCreationOpen, int numSections, int currentIndex})>(
+      selector: (context, tableState, playbackState) => (
         isSectionControlOpen: false, // Moved to SectionSettingsState
         isSectionCreationOpen: false, // Moved to SectionSettingsState
         numSections: tableState.sectionsCount,
@@ -93,21 +98,13 @@ class _SequencerBodyState extends State<SequencerBody> {
               top: 0,
               bottom: 0,
               width: MediaQuery.of(context).size.width * (SequencerBody.sideControlWidthPercent / 100.0),
-              child: const SoundGridSideControlWidget(side: SideControlSide.left),
-            ),
-
-            // Overlay menus over the grid area only (keep side control visible)
-            if (data.isBodyBrowserOpen)
-              Positioned(
-                left: MediaQuery.of(context).size.width * (SequencerBody.sideControlWidthPercent / 100.0),
-                right: 0,
-                top: 0,
-                bottom: 0,
-                child: const SequencerBodyOverlayMenu(
-                  type: SequencerBodyOverlayMenuType.sampleBrowser,
-                  child: SampleSelectionWidget(),
-                ),
+              child: SoundGridSideControlWidget(
+                side: SideControlSide.left,
+                onBack: widget.onBack,
+                onSettings: widget.onSettings,
+                onRecordings: widget.onRecordings,
               ),
+            ),
 
             // Recording overlay removed - recordings now auto-save as messages
             // Section settings moved to multitask panel (no longer an overlay)

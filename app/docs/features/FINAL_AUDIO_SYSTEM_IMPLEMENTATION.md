@@ -874,7 +874,7 @@ popular = db.audio_files.find().sort("reference_count", -1).limit(10)
 
 ```bash
 # 1. Update code
-cd /Users/romansmirnov/projects/fortuned
+cd /Users/romansmirnov/projects/rehorsed
 git pull
 
 # 2. Reinitialize database (drops existing data)
@@ -886,7 +886,7 @@ cd ../app
 flutter pub get
 
 # 4. Restart server
-sudo systemctl restart fortuned-api
+sudo systemctl restart rehorsed-api
 
 # 5. Rebuild Flutter app
 flutter run  # or flutter build

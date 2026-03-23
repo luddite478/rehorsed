@@ -108,6 +108,25 @@ int sunvox_preview_slot(int slot, float pitch, float volume);
 int sunvox_preview_cell(int step, int column, float pitch, float volume);
 void sunvox_preview_stop(void);
 
+// NOTE: Microphone Input module functions removed - mic recording now bypasses SunVox entirely
+// Mic audio is captured directly to WAV file without going through SunVox
+// See docs/features/microphone_dual_output_architecture.md for archived approach
+
+// Wrapper for SunVox sv_get_module_scope2 (for waveform visualization)
+// Get audio scope data from a specific module
+// Returns: number of samples returned
+__attribute__((visibility("default"))) __attribute__((used))
+uint32_t sunvox_wrapper_get_module_scope2(int slot, int mod_num, int channel, int16_t* dest_buf, uint32_t samples_to_read);
+
+// Set pattern event with sample offset (for precise positioning)
+// Uses SunVox 09xx (coarse) and 07xx (fine) offset effects for sub-step precision
+// Note: sample_slot parameter (not module ID) - looks up module internally
+__attribute__((visibility("default"))) __attribute__((used))
+void sunvox_wrapper_set_pattern_event_with_offset(
+    int pat_id, int track, int line, int note, int velocity, 
+    int sample_slot, int offset_frames
+);
+
 #ifdef __cplusplus
 }
 #endif

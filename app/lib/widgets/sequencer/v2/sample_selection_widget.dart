@@ -6,22 +6,60 @@ import '../../../utils/app_colors.dart';
 import '../../../state/sequencer/sample_browser.dart';
 import '../../../state/sequencer/sample_bank.dart';
 import '../../../state/sequencer/playback.dart';
+import '../../../state/sequencer/table.dart';
 
-// Main sizing control variables for easy adjustment
-class SampleBrowserSizing {
-  // Tile dimensions
-  static const double tileAspectRatio = 2.0; // Width:Height ratio (makes tiles shorter)
-  static const double tileSpacing = 2.0; // Spacing between tiles in percent of screen width
-  static const double tilePadding = 1.5; // Internal padding in percent of tile size
-  
-  // File tile split ratios
-  static const double playButtonAreaRatio = 0.5; // Top 50% for play button
-  static const double pickAreaRatio = 0.5; // Bottom 50% for file info
-  
-  // Button sizes
-  static const double headerButtonHeight = 12.0; // Header buttons height in percent of header
-  static const double closeButtonSize = 8.0; // Close button size in percent of screen width
-  static const double backButtonHeight = 8.0; // Back button height in percent of header
+Future<void> _selectSampleForCurrentTarget(
+  BuildContext context, {
+  required SampleBrowserState browserState,
+  required SampleBankState sampleBankState,
+  required SampleItem item,
+}) async {
+  final targetCol = browserState.targetCol;
+  final targetStep = browserState.targetStep;
+  final explicitBankSlot = browserState.targetBankSlot;
+  final sampleId = item.sampleId;
+
+  if (targetCol == null || sampleId == null) {
+    browserState.hide();
+    if (context.mounted) Navigator.of(context).pop();
+    return;
+  }
+
+  int? resolvedSlot;
+
+  // Cell-targeted selection should not overwrite an existing bank slot.
+  // Resolve by sample id into a dedicated slot (or reuse same-id slot).
+  if (targetStep != null) {
+    resolvedSlot = await sampleBankState.loadSampleForCell(sampleId);
+    if (resolvedSlot == null) {
+      Log.d('❌ No dedicated sample slots available for sample id=$sampleId');
+    } else {
+      Log.d(
+        'Loading sample id=$sampleId into dedicated bank slot $resolvedSlot (grid col $targetCol)',
+      );
+      final tableState = context.read<TableState>();
+      tableState.setCell(targetStep, targetCol, resolvedSlot, -1.0, -1.0);
+    }
+  } else {
+    // Explicit slot editing (sample bank context): keep existing behavior.
+    final slot = explicitBankSlot ?? sampleBankState.activeSlot;
+    if (slot >= 0 && slot < SampleBankState.maxSampleSlots) {
+      Log.d('Loading sample id=$sampleId into explicit bank slot $slot');
+      final success = await sampleBankState.loadSample(slot, sampleId);
+      if (success) {
+        resolvedSlot = slot;
+      }
+    }
+  }
+
+  if (resolvedSlot == null) {
+    debugPrint('❌ Failed to resolve/load sample slot for id=$sampleId');
+  } else {
+    debugPrint('✅ Sample loaded into slot $resolvedSlot');
+  }
+
+  browserState.hide();
+  if (context.mounted) Navigator.of(context).pop();
 }
 
 class SampleSelectionWidget extends StatelessWidget {
@@ -31,545 +69,517 @@ class SampleSelectionWidget extends StatelessWidget {
   Widget build(BuildContext context) {
     return Consumer2<SampleBrowserState, SampleBankState>(
       builder: (context, sampleBrowserState, sampleBankState, child) {
-
-        
         return Container(
-          decoration: BoxDecoration(
-            color: AppColors.sequencerSurfaceBase,
-            borderRadius: BorderRadius.circular(2), // Sharp corners
-            border: Border.all(
-              color: AppColors.sequencerBorder,
-              width: 1,
-            ),
-            boxShadow: [
-              // Protruding effect
-              BoxShadow(
-                color: AppColors.sequencerShadow,
-                blurRadius: 3,
-                offset: const Offset(0, 2),
-              ),
-              BoxShadow(
-                color: AppColors.sequencerSurfaceRaised,
-                blurRadius: 1,
-                offset: const Offset(0, -1),
-              ),
-            ],
-          ),
-          child: _buildSampleBrowser(context),
+          color: AppColors.sequencerSurfaceBase,
+          child: _buildContent(context, sampleBrowserState, sampleBankState),
         );
       },
     );
   }
 
-  Widget _buildSampleBrowser(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.all(12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Header with sample selection info - using responsive sizing
-          LayoutBuilder(
-            builder: (context, headerConstraints) {
-              final screenWidth = headerConstraints.maxWidth;
-              final backButtonHeight = screenWidth * (SampleBrowserSizing.backButtonHeight / 100);
-              final closeButtonSize = screenWidth * (SampleBrowserSizing.closeButtonSize / 100);
-              final headerFontSize = screenWidth * 0.035;
-              final pathFontSize = screenWidth * 0.025;
-              
-              // Access state from context within the nested builder
-              final browserState = context.read<SampleBrowserState>();
-              
-              return Row(
-                children: [
-                  if (browserState.currentPath.isNotEmpty) ...[
-                                          GestureDetector(
-                        onTap: () {
-                          // Navigation works the same for both browsers
-                          browserState.navigateBack();
-                        },
-                      child: Container(
-                        height: backButtonHeight.clamp(32.0, 50.0),
-                        padding: EdgeInsets.symmetric(
-                          horizontal: screenWidth * 0.03,
-                          vertical: screenWidth * 0.01,
-                        ),
-                        decoration: BoxDecoration(
-                          color: AppColors.sequencerSurfaceRaised,
-                          borderRadius: BorderRadius.circular(6),
-                          border: Border.all(
-                            color: AppColors.sequencerBorder,
-                            width: 1,
+  Widget _buildContent(BuildContext context, SampleBrowserState browserState, SampleBankState sampleBankState) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Navigation bar (back button + current path)
+        _buildNavBar(context, browserState),
+        // Grid / list of items
+        Expanded(
+          child: _buildItemList(context, browserState, sampleBankState),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildNavBar(BuildContext context, SampleBrowserState browserState) {
+    return Consumer<SampleBrowserState>(
+      builder: (context, state, _) {
+        final hasPath = state.currentPath.isNotEmpty;
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            border: Border(
+              bottom: BorderSide(color: AppColors.sequencerBorder, width: 0.5),
+            ),
+          ),
+          child: Row(
+            children: [
+              if (hasPath)
+                GestureDetector(
+                  onTap: () => state.navigateBack(),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: AppColors.sequencerSurfaceRaised,
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(color: AppColors.sequencerBorder, width: 1),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.arrow_back, color: AppColors.sequencerText, size: 16),
+                        const SizedBox(width: 4),
+                        Text(
+                          'BACK',
+                          style: GoogleFonts.sourceSans3(
+                            color: AppColors.sequencerText,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            letterSpacing: 1,
                           ),
-                          boxShadow: [
-                            BoxShadow(
-                              color: AppColors.sequencerShadow,
-                              blurRadius: 3,
-                              offset: const Offset(0, 2),
-                            ),
-                          ],
                         ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              Icons.arrow_back, 
-                              color: AppColors.sequencerText, 
-                              size: (headerFontSize * 1.2).clamp(14.0, 20.0),
-                            ),
-                            SizedBox(width: screenWidth * 0.015),
-                            Text(
-                              'BACK',
-                              style: GoogleFonts.sourceSans3(
-                                color: AppColors.sequencerText,
-                                fontSize: headerFontSize.clamp(12.0, 16.0),
-                                fontWeight: FontWeight.w600,
-                                letterSpacing: 1,
-                              ),
-                            ),
-                          ],
-                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              if (hasPath) const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  state.currentPath.isEmpty
+                      ? 'samples/'
+                      : 'samples/${state.currentPath.join('/')}/',
+                  style: GoogleFonts.sourceSans3(
+                    color: AppColors.sequencerLightText,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w400,
+                    letterSpacing: 0.3,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildItemList(BuildContext context, SampleBrowserState browserState, SampleBankState sampleBankState) {
+    if (browserState.isLoading) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.folder_open, color: AppColors.sequencerLightText, size: 24),
+            const SizedBox(height: 8),
+            Text(
+              'Loading samples...',
+              style: GoogleFonts.sourceSans3(
+                color: AppColors.sequencerLightText,
+                fontSize: 12,
+                fontWeight: FontWeight.w400,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    if (browserState.currentItems.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.folder_open, color: AppColors.sequencerLightText, size: 24),
+            const SizedBox(height: 8),
+            Text(
+              'No samples found',
+              style: GoogleFonts.sourceSans3(
+                color: AppColors.sequencerLightText,
+                fontSize: 12,
+                fontWeight: FontWeight.w400,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Consumer<SampleBrowserState>(
+      builder: (context, state, _) {
+        final items = state.currentItems;
+        final folders = items.where((i) => i.isFolder).toList();
+        final files = items.where((i) => !i.isFolder).toList();
+
+        // Pure-file directory → list view with tap-to-play + SELECT button
+        if (folders.isEmpty && files.isNotEmpty) {
+          return _buildFileList(context, files, state, sampleBankState);
+        }
+
+        // Mixed or folder-only → 2-column grid
+        return _buildFolderGrid(context, items, state, sampleBankState);
+      },
+    );
+  }
+
+  // ─── File list (pure-file directory) ───────────────────────────────────────
+
+  Widget _buildFileList(
+    BuildContext context,
+    List<SampleItem> files,
+    SampleBrowserState browserState,
+    SampleBankState sampleBankState,
+  ) {
+    return ListView.builder(
+      padding: const EdgeInsets.all(8),
+      itemCount: files.length,
+      itemBuilder: (context, index) {
+        final item = files[index];
+        return _FileListTile(item: item, browserState: browserState, sampleBankState: sampleBankState);
+      },
+    );
+  }
+
+  // ─── Folder / mixed grid ───────────────────────────────────────────────────
+
+  Widget _buildFolderGrid(
+    BuildContext context,
+    List<SampleItem> items,
+    SampleBrowserState browserState,
+    SampleBankState sampleBankState,
+  ) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final spacing = constraints.maxWidth * 0.02;
+        return GridView.builder(
+          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: 2,
+            crossAxisSpacing: spacing,
+            mainAxisSpacing: spacing,
+            childAspectRatio: 2.0,
+          ),
+          itemCount: items.length,
+          padding: EdgeInsets.all(spacing),
+          itemBuilder: (context, index) {
+            final item = items[index];
+            return _GridTile(item: item, browserState: browserState, sampleBankState: sampleBankState);
+          },
+        );
+      },
+    );
+  }
+}
+
+// ─── File list tile with tap-to-play + SELECT button ───────────────────────
+
+class _FileListTile extends StatelessWidget {
+  const _FileListTile({
+    required this.item,
+    required this.browserState,
+    required this.sampleBankState,
+  });
+
+  final SampleItem item;
+  final SampleBrowserState browserState;
+  final SampleBankState sampleBankState;
+
+  String get _formatLabel {
+    final n = item.name.toLowerCase();
+    if (n.endsWith('.wav')) return 'WAV';
+    if (n.endsWith('.mp3')) return 'MP3';
+    if (n.endsWith('.m4a')) return 'M4A';
+    return 'AUDIO';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: () async {
+        final playbackState = context.read<PlaybackState>();
+        await browserState.previewSample(item, sampleBankState, playbackState);
+      },
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 6),
+        decoration: BoxDecoration(
+          color: AppColors.sequencerSurfaceRaised,
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: AppColors.sequencerBorder, width: 1),
+          boxShadow: [
+            BoxShadow(
+              color: AppColors.sequencerShadow,
+              blurRadius: 2,
+              offset: const Offset(0, 1),
+            ),
+          ],
+        ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          child: Row(
+            children: [
+              // File name + format
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      item.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: GoogleFonts.sourceSans3(
+                        color: AppColors.sequencerText,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
                       ),
                     ),
-                    SizedBox(width: screenWidth * 0.02),
-                  ],
-                  Expanded(
-                    child: Text(
-                      browserState.currentPath.isEmpty 
-                          ? 'samples/' 
-                          : 'samples/${browserState.currentPath.join('/')}/',
+                    const SizedBox(height: 2),
+                    Text(
+                      _formatLabel,
                       style: GoogleFonts.sourceSans3(
                         color: AppColors.sequencerLightText,
-                        fontSize: pathFontSize.clamp(10.0, 14.0),
-                        fontWeight: FontWeight.w400,
-                        letterSpacing: 0.3,
-                      ),
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                  GestureDetector(
-                    onTap: () {
-                      // Close the sample browser using the new state
-                      browserState.hide();
-                    },
-                    child: Container(
-                      width: closeButtonSize.clamp(40.0, 60.0),
-                      height: closeButtonSize.clamp(40.0, 60.0),
-                      decoration: BoxDecoration(
-                        color: AppColors.sequencerSurfacePressed,
-                        borderRadius: BorderRadius.circular(6),
-                        border: Border.all(
-                          color: AppColors.sequencerAccent.withOpacity(0.8),
-                          width: 1,
-                        ),
-                        boxShadow: [
-                          BoxShadow(
-                            color: AppColors.sequencerShadow,
-                            blurRadius: 3,
-                            offset: const Offset(0, 2),
-                          ),
-                        ],
-                      ),
-                      child: Icon(
-                        Icons.close,
-                        color: AppColors.sequencerAccent,
-                        size: (closeButtonSize * 0.5).clamp(18.0, 28.0),
+                        fontSize: 10,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: 0.5,
                       ),
                     ),
-                  ),
-                ],
-              );
-            },
-          ),
-          const SizedBox(height: 12),
-          
-          // Vertical scrolling 2-column grid as requested
-          Expanded(
-            child: context.watch<SampleBrowserState>().isLoading
-                ? Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(
-                          Icons.folder_open,
-                          color: AppColors.sequencerLightText,
-                          size: 24,
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          'Loading samples...',
-                          style: GoogleFonts.sourceSans3(
-                            color: AppColors.sequencerLightText,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w400,
-                          ),
-                        ),
-                      ],
-                    ),
-                  )
-                : context.watch<SampleBrowserState>().currentItems.isEmpty
-                ? Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(
-                          Icons.folder_open,
-                          color: AppColors.sequencerLightText,
-                          size: 24,
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          'No samples found',
-                          style: GoogleFonts.sourceSans3(
-                            color: AppColors.sequencerLightText,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w400,
-                          ),
-                        ),
-                      ],
-                    ),
-                  )
-                : LayoutBuilder(
-                    builder: (context, constraints) {
-                      final screenWidth = constraints.maxWidth;
-                      final spacing = screenWidth * (SampleBrowserSizing.tileSpacing / 100);
-                      
-                      final items = context.watch<SampleBrowserState>().currentItems;
-                      final folders = items.where((i) => i.isFolder).toList();
-                      final files = items.where((i) => !i.isFolder).toList();
-
-                      // If this folder contains files (and no subfolders), show a simple list of files
-                      if (folders.isEmpty && files.isNotEmpty) {
-                        return ListView.builder(
-                          padding: EdgeInsets.all(spacing),
-                          itemCount: files.length,
-                          itemBuilder: (context, index) {
-                            final item = files[index];
-                            final browserState = context.read<SampleBrowserState>();
-                            final sampleBankState = context.read<SampleBankState>();
-
-                            final fileNameStyle = GoogleFonts.sourceSans3(
-                              color: AppColors.sequencerText,
-                              fontSize: (screenWidth * 0.035).clamp(12.0, 16.0),
-                              fontWeight: FontWeight.w600,
-                            );
-                            final metaStyle = GoogleFonts.sourceSans3(
-                              color: AppColors.sequencerLightText,
-                              fontSize: (screenWidth * 0.028).clamp(10.0, 13.0),
-                              fontWeight: FontWeight.w600,
-                            );
-
-                            return Container(
-                              margin: EdgeInsets.only(bottom: spacing),
-                              decoration: BoxDecoration(
-                                color: AppColors.sequencerSurfaceRaised,
-                                borderRadius: BorderRadius.circular(6),
-                                border: Border.all(color: AppColors.sequencerBorder, width: 1),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: AppColors.sequencerShadow,
-                                    blurRadius: 2,
-                                    offset: const Offset(0, 1),
-                                  ),
-                                ],
-                              ),
-                              child: Material(
-                                color: Colors.transparent,
-                                child: InkWell(
-                                  borderRadius: BorderRadius.circular(6),
-                                  onTap: () async {
-                                    final targetSlot = browserState.targetCol;
-                                    if (targetSlot != null && item.sampleId != null) {
-                                      Log.d(' Loading sample id=${item.sampleId} into slot $targetSlot');
-                                      final success = await sampleBankState.loadSample(targetSlot, item.sampleId!);
-                                      debugPrint(success ? '✅ Sample loaded successfully' : '❌ Failed to load sample');
-                                    }
-                                    browserState.hide();
-                                  },
-                                  child: Padding(
-                                    padding: EdgeInsets.symmetric(horizontal: spacing, vertical: spacing * 0.8),
-                                    child: Row(
-                                      children: [
-                                        Expanded(
-                                          child: Column(
-                                            crossAxisAlignment: CrossAxisAlignment.start,
-                                            children: [
-                                              Text(
-                                                item.name,
-                                                maxLines: 1,
-                                                overflow: TextOverflow.ellipsis,
-                                                style: fileNameStyle,
-                                              ),
-                                              const SizedBox(height: 4),
-                                              Text(
-                                                item.name.toLowerCase().endsWith('.wav') ? 'WAV' :
-                                                item.name.toLowerCase().endsWith('.mp3') ? 'MP3' :
-                                                item.name.toLowerCase().endsWith('.m4a') ? 'M4A' : 'AUDIO',
-                                                style: metaStyle,
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                        GestureDetector(
-                                          onTap: () async {
-                                            // Preview using the new preview method that loads into slot and uses PlaybackState
-                                            final browserState = context.read<SampleBrowserState>();
-                                            final playbackState = context.read<PlaybackState>();
-                                            await browserState.previewSample(item, sampleBankState, playbackState);
-                                          },
-                                          child: Container(
-                                            width: (screenWidth * 0.14).clamp(56.0, 72.0),
-                                            height: (screenWidth * 0.10).clamp(40.0, 56.0),
-                                            decoration: BoxDecoration(
-                                              color: AppColors.sequencerAccent.withOpacity(0.15),
-                                              borderRadius: BorderRadius.circular(6),
-                                              border: Border.all(color: AppColors.sequencerAccent.withOpacity(0.6), width: 1),
-                                            ),
-                                            child: Icon(
-                                              Icons.play_arrow,
-                                              color: AppColors.sequencerAccent,
-                                              size: (screenWidth * 0.06).clamp(24.0, 32.0),
-                                            ),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            );
-                          },
-                        );
-                      }
-
-                      // Otherwise keep existing grid (folders or mixed content)
-                      return GridView.builder(
-                        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                          crossAxisCount: 2, // 2 columns as requested
-                          crossAxisSpacing: spacing,
-                          mainAxisSpacing: spacing,
-                          childAspectRatio: SampleBrowserSizing.tileAspectRatio, // Controlled aspect ratio
-                        ),
-                        itemCount: items.length,
-                        padding: EdgeInsets.all(spacing),
-                    itemBuilder: (context, index) {
-                      final item = items[index];
-                      final browserState = context.read<SampleBrowserState>();
-                            
-                      return GestureDetector(
-                        onTap: () {
-                          // Only handle folder navigation at the main tile level
-                          if (item.isFolder) {
-                            browserState.navigateToFolder(item.name);
-                          }
-                          // File selection is handled by the bottom part's onTap
-                        },
-                        child: Container(
-                          decoration: BoxDecoration(
-                            color: item.isFolder 
-                                ? AppColors.sequencerSurfaceRaised
-                                : AppColors.sequencerAccent.withOpacity(0.3),
-                            borderRadius: BorderRadius.circular(4),
-                            border: Border.all(
-                              color: item.isFolder 
-                                  ? AppColors.sequencerBorder
-                                  : AppColors.sequencerAccent.withOpacity(0.6),
-                              width: 1,
-                            ),
-                            boxShadow: [
-                              // Protruding effect for all items
-                              BoxShadow(
-                                color: AppColors.sequencerShadow,
-                                blurRadius: 2,
-                                offset: const Offset(0, 1),
-                              ),
-                              BoxShadow(
-                                color: AppColors.sequencerSurfaceRaised,
-                                blurRadius: 1,
-                                offset: const Offset(0, -0.5),
-                              ),
-                            ],
-                          ),
-                          child: LayoutBuilder(
-                            builder: (context, tileConstraints) {
-                              final tilePadding = tileConstraints.maxWidth * (SampleBrowserSizing.tilePadding / 100);
-                              final iconSize = tileConstraints.maxHeight * 0.4;
-                              final fontSize = tileConstraints.maxWidth * 0.08;
-                              
-                              return item.isFolder 
-                                  ? // Folder layout
-                                    Center(
-                                      child: Padding(
-                                        padding: EdgeInsets.all(tilePadding),
-                                        child: Column(
-                                          mainAxisAlignment: MainAxisAlignment.center,
-                                          children: [
-                                            Icon(
-                                              Icons.folder,
-                                              color: AppColors.sequencerAccent,
-                                              size: iconSize.clamp(20.0, 40.0),
-                                            ),
-                                            SizedBox(height: tilePadding * 0.5),
-                                            Flexible(
-                                              child: Text(
-                                                item.name,
-                                                style: GoogleFonts.sourceSans3(
-                                                  color: AppColors.sequencerText,
-                                                  fontSize: fontSize.clamp(8.0, 14.0),
-                                                  fontWeight: FontWeight.w500,
-                                                ),
-                                                textAlign: TextAlign.center,
-                                                maxLines: 2,
-                                                overflow: TextOverflow.ellipsis,
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                      ),
-                                    )
-                                  : // File layout with 50/50 split
-                                    Column(
-                                      children: [
-                                        // Top 50% - Play button area
-                                        Expanded(
-                                          flex: (SampleBrowserSizing.playButtonAreaRatio * 100).round(),
-                                          child: GestureDetector(
-                                            onTap: () async {
-                                              // Preview using the new preview method that loads into slot and uses PlaybackState
-                                              final browserState = context.read<SampleBrowserState>();
-                                              final sampleBankState = context.read<SampleBankState>();
-                                              final playbackState = context.read<PlaybackState>();
-                                              await browserState.previewSample(item, sampleBankState, playbackState);
-                                            },
-                                            child: Container(
-                                              width: double.infinity,
-                                              decoration: BoxDecoration(
-                                                color: AppColors.sequencerSurfacePressed,
-                                                borderRadius: const BorderRadius.only(
-                                                  topLeft: Radius.circular(4),
-                                                  topRight: Radius.circular(4),
-                                                ),
-                                                border: const Border(
-                                                  bottom: BorderSide(
-                                                    color: AppColors.sequencerBorder,
-                                                    width: 1,
-                                                  ),
-                                                ),
-                                              ),
-                                              child: Center(
-                                                child: Container(
-                                                  width: tileConstraints.maxHeight * 0.35,
-                                                  height: tileConstraints.maxHeight * 0.25,
-                                                  decoration: BoxDecoration(
-                                                    color: AppColors.sequencerAccent.withOpacity(0.9),
-                                                    borderRadius: BorderRadius.circular(tileConstraints.maxHeight * 0.125),
-                                                    border: Border.all(
-                                                      color: AppColors.sequencerBorder,
-                                                      width: 1,
-                                                    ),
-                                                    boxShadow: [
-                                                      BoxShadow(
-                                                        color: AppColors.sequencerShadow,
-                                                        blurRadius: 2,
-                                                        offset: const Offset(0, 1),
-                                                      ),
-                                                    ],
-                                                  ),
-                                                  child: Icon(
-                                                    Icons.play_arrow,
-                                                    color: AppColors.sequencerPageBackground,
-                                                    size: (tileConstraints.maxHeight * 0.18).clamp(14.0, 24.0),
-                                                  ),
-                                                ),
-                                              ),
-                                            ),
-                                          ),
-                                        ),
-                                        // Bottom 50% - Pick/Select area
-                                        Expanded(
-                                          flex: (SampleBrowserSizing.pickAreaRatio * 100).round(),
-                                          child: GestureDetector(
-                                            onTap: () async {
-                                              final browserState = context.read<SampleBrowserState>();
-                                              final sampleBankState = context.read<SampleBankState>();
-                                              
-                                              if (item.isFolder) {
-                                                browserState.navigateToFolder(item.name);
-                                              } else {
-                                                // Load sample by manifest id into the target slot
-                                                final targetSlot = browserState.targetCol;
-                                                if (targetSlot != null && item.sampleId != null) {
-                                                  Log.d(' Loading sample id=${item.sampleId} into slot $targetSlot');
-                                                  final success = await sampleBankState.loadSample(targetSlot, item.sampleId!);
-                                                  debugPrint(success ? '✅ Sample loaded successfully' : '❌ Failed to load sample');
-                                                }
-                                                // Hide the browser after selection
-                                                browserState.hide();
-                                              }
-                                            },
-                                            child: Container(
-                                              width: double.infinity,
-                                              padding: EdgeInsets.all(tilePadding),
-                                              decoration: const BoxDecoration(
-                                                color: AppColors.sequencerAccent,
-                                                borderRadius: BorderRadius.only(
-                                                  bottomLeft: Radius.circular(4),
-                                                  bottomRight: Radius.circular(4),
-                                                ),
-                                              ),
-                                              child: Column(
-                                                crossAxisAlignment: CrossAxisAlignment.start,
-                                                children: [
-                                                  // File name
-                                                  Expanded(
-                                                    child: Text(
-                                                      item.name,
-                                                      style: GoogleFonts.sourceSans3(
-                                                        color: AppColors.sequencerPageBackground,
-                                                        fontSize: (fontSize * 0.8).clamp(6.0, 12.0),
-                                                        fontWeight: FontWeight.w600,
-                                                      ),
-                                                      maxLines: 2,
-                                                      overflow: TextOverflow.ellipsis,
-                                                    ),
-                                                  ),
-                                                  // File type and tap hint
-                                                  Text(
-                                                    item.name.toLowerCase().endsWith('.wav') ? 'WAV' :
-                                                    item.name.toLowerCase().endsWith('.mp3') ? 'MP3' :
-                                                    item.name.toLowerCase().endsWith('.m4a') ? 'M4A' : 'AUDIO',
-                                                    style: GoogleFonts.sourceSans3(
-                                                      color: AppColors.sequencerPageBackground.withOpacity(0.8),
-                                                      fontSize: (fontSize * 0.6).clamp(5.0, 10.0),
-                                                      fontWeight: FontWeight.w600,
-                                                    ),
-                                                  ),
-                                                  Text(
-                                                    'TAP TO SELECT',
-                                                    style: GoogleFonts.sourceSans3(
-                                                      color: AppColors.sequencerPageBackground.withOpacity(0.9),
-                                                      fontSize: (fontSize * 0.5).clamp(4.0, 8.0),
-                                                      fontWeight: FontWeight.w700,
-                                                      letterSpacing: 0.5,
-                                                    ),
-                                                  ),
-                                                ],
-                                              ),
-                                            ),
-                                          ),
-                                        ),
-                                      ],
-                                    );
-                            },
-                          ),
-                        ),
-                        );
-                      },
-                    );
-                  },
+                  ],
                 ),
+              ),
+              const SizedBox(width: 8),
+              // SELECT button
+              _ActionButton(
+                label: 'SELECT',
+                icon: Icons.check,
+                filled: true,
+                onTap: () async {
+                  await _selectSampleForCurrentTarget(
+                    context,
+                    browserState: browserState,
+                    sampleBankState: sampleBankState,
+                    item: item,
+                  );
+                },
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
-} 
+}
+
+// ─── Shared action button ───────────────────────────────────────────────────
+
+class _ActionButton extends StatelessWidget {
+  const _ActionButton({
+    required this.label,
+    required this.icon,
+    required this.filled,
+    required this.onTap,
+  });
+
+  final String label;
+  final IconData icon;
+  final bool filled;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        decoration: BoxDecoration(
+          color: filled ? AppColors.sequencerAccent : AppColors.sequencerAccent.withOpacity(0.12),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(
+            color: AppColors.sequencerAccent.withOpacity(filled ? 1.0 : 0.6),
+            width: 1,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              icon,
+              size: 14,
+              color: filled ? AppColors.sequencerPageBackground : AppColors.sequencerAccent,
+            ),
+            const SizedBox(width: 4),
+            Text(
+              label,
+              style: GoogleFonts.sourceSans3(
+                color: filled ? AppColors.sequencerPageBackground : AppColors.sequencerAccent,
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0.5,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Grid tile (folder or file) ────────────────────────────────────────────
+
+class _GridTile extends StatelessWidget {
+  const _GridTile({
+    required this.item,
+    required this.browserState,
+    required this.sampleBankState,
+  });
+
+  final SampleItem item;
+  final SampleBrowserState browserState;
+  final SampleBankState sampleBankState;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: () async {
+        if (item.isFolder) {
+          browserState.navigateToFolder(item.name);
+          return;
+        }
+        final playbackState = context.read<PlaybackState>();
+        await browserState.previewSample(item, sampleBankState, playbackState);
+      },
+      child: Container(
+        decoration: BoxDecoration(
+          color: item.isFolder
+              ? AppColors.sequencerSurfaceRaised
+              : AppColors.sequencerAccent.withOpacity(0.3),
+          borderRadius: BorderRadius.circular(4),
+          border: Border.all(
+            color: item.isFolder
+                ? AppColors.sequencerBorder
+                : AppColors.sequencerAccent.withOpacity(0.6),
+            width: 1,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: AppColors.sequencerShadow,
+              blurRadius: 2,
+              offset: const Offset(0, 1),
+            ),
+          ],
+        ),
+        child: LayoutBuilder(
+          builder: (context, tileConstraints) {
+            final iconSize = tileConstraints.maxHeight * 0.4;
+            final fontSize = tileConstraints.maxWidth * 0.08;
+
+            if (item.isFolder) {
+              return Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(8),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        Icons.folder,
+                        color: AppColors.sequencerAccent,
+                        size: iconSize.clamp(20.0, 40.0),
+                      ),
+                      const SizedBox(height: 4),
+                      Flexible(
+                        child: Text(
+                          item.name,
+                          style: GoogleFonts.sourceSans3(
+                            color: AppColors.sequencerText,
+                            fontSize: fontSize.clamp(8.0, 14.0),
+                            fontWeight: FontWeight.w500,
+                          ),
+                          textAlign: TextAlign.center,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            }
+
+            // File tile: tap tile to play, keep dedicated SELECT action
+            return Column(
+              children: [
+                // Top — sample name / preview area
+                Expanded(
+                  child: Container(
+                    width: double.infinity,
+                    decoration: const BoxDecoration(
+                      color: AppColors.sequencerSurfacePressed,
+                      borderRadius: BorderRadius.only(
+                        topLeft: Radius.circular(4),
+                        topRight: Radius.circular(4),
+                      ),
+                      border: Border(
+                        bottom: BorderSide(color: AppColors.sequencerBorder, width: 1),
+                      ),
+                    ),
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                    alignment: Alignment.center,
+                    child: Text(
+                      item.name,
+                      style: GoogleFonts.sourceSans3(
+                        color: AppColors.sequencerText,
+                        fontSize: (fontSize * 0.75).clamp(7.0, 12.0),
+                        fontWeight: FontWeight.w600,
+                      ),
+                      textAlign: TextAlign.center,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ),
+                // Bottom — SELECT
+                Expanded(
+                  child: GestureDetector(
+                    onTap: () async {
+                      await _selectSampleForCurrentTarget(
+                        context,
+                        browserState: browserState,
+                        sampleBankState: sampleBankState,
+                        item: item,
+                      );
+                    },
+                    child: Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(6),
+                      decoration: const BoxDecoration(
+                        color: AppColors.sequencerAccent,
+                        borderRadius: BorderRadius.only(
+                          bottomLeft: Radius.circular(4),
+                          bottomRight: Radius.circular(4),
+                        ),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(
+                            child: Text(
+                              item.name,
+                              style: GoogleFonts.sourceSans3(
+                                color: AppColors.sequencerPageBackground,
+                                fontSize: (fontSize * 0.8).clamp(6.0, 12.0),
+                                fontWeight: FontWeight.w600,
+                              ),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          Text(
+                            'SELECT',
+                            style: GoogleFonts.sourceSans3(
+                              color: AppColors.sequencerPageBackground.withOpacity(0.9),
+                              fontSize: (fontSize * 0.5).clamp(4.0, 9.0),
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: 0.5,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+}

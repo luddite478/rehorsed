@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document explains how audio recording works in the Fortuned sequencer using the SunVox library, miniaudio for audio device management, and a custom WAV encoder.
+This document explains how audio recording works in the Rehorsed sequencer using the SunVox library, miniaudio for audio device management, and a custom WAV encoder.
 
 ## Architecture Diagram
 

@@ -21,6 +21,7 @@ class MultitaskPanelState extends ChangeNotifier {
   void showShareWidget() => setMode(MultitaskPanelMode.shareWidget);
   void showSectionSettings() => setMode(MultitaskPanelMode.sectionSettings);
   void showSectionManagement() => setMode(MultitaskPanelMode.sectionManagement);
+  void showLayerSettings() => setMode(MultitaskPanelMode.layerSettings);
   void showPlaceholder() => setMode(MultitaskPanelMode.placeholder);
 }
 
@@ -34,6 +35,7 @@ enum MultitaskPanelMode {
   shareWidget,
   sectionSettings,
   sectionManagement,
+  layerSettings,
   @Deprecated('Recording widget removed - recordings now auto-save as messages')
   recordingWidget,
 }

@@ -264,7 +264,7 @@ int sv_get_autostop( int slot ) SUNVOX_FN_ATTR;
 int sv_set_pattern_loop( int slot, int pattern_num ) SUNVOX_FN_ATTR;
 
 /*
-   ===== FORTUNED MODIFICATION: Pattern loop counting API =====
+   ===== REHORSED MODIFICATION: Pattern loop counting API =====
    sv_set_pattern_loop_count() - set how many times a pattern should loop before advancing.
    This enables seamless pattern sequencing with loop counts per pattern.
    Parameters:
@@ -581,6 +581,92 @@ int sv_get_module_ctl_max( int slot, int mod_num, int ctl_num, int scaled ) SUNV
 int sv_get_module_ctl_offset( int slot, int mod_num, int ctl_num ) SUNVOX_FN_ATTR; /* Get display value offset */
 int sv_get_module_ctl_type( int slot, int mod_num, int ctl_num ) SUNVOX_FN_ATTR; /* 0 - normal (scaled); 1 - selector (enum); */
 int sv_get_module_ctl_group( int slot, int mod_num, int ctl_num ) SUNVOX_FN_ATTR;
+
+/*
+   sv_set_input_monitor_volume() - 
+   Set the monitoring volume for the Input module (what you hear).
+   This does not affect recording volume.
+   Parameters:
+     slot - slot number
+     mod_num - Input module number
+     volume - monitor volume (0-256, where 256 = 100%, 0 = silent)
+   Return value: 0 on success, negative on error
+*/
+int sv_set_input_monitor_volume( int slot, int mod_num, int volume ) SUNVOX_FN_ATTR;
+
+/*
+   sv_set_input_recording_volume() - 
+   Set the recording volume for the Input module (what goes to file).
+   This does not affect monitoring volume.
+   Parameters:
+     slot - slot number
+     mod_num - Input module number
+     volume - recording volume (0-256, where 256 = 100%)
+   Return value: 0 on success, negative on error
+*/
+int sv_set_input_recording_volume( int slot, int mod_num, int volume ) SUNVOX_FN_ATTR;
+
+/*
+   sv_get_input_monitor_volume() - 
+   Get the monitoring volume for the Input module.
+   Return value: volume (0-256) or negative on error
+*/
+int sv_get_input_monitor_volume( int slot, int mod_num ) SUNVOX_FN_ATTR;
+
+/*
+   sv_get_input_recording_volume() - 
+   Get the recording volume for the Input module.
+   Return value: volume (0-256) or negative on error
+*/
+int sv_get_input_recording_volume( int slot, int mod_num ) SUNVOX_FN_ATTR;
+
+/*
+   sv_set_external_recording_active() - 
+   Signal that external recording is active (recording outside SunVox file encoders).
+   This enables dual-pass rendering when recording with microphone input.
+   Parameters:
+     slot - slot number
+     active - 1 if recording is active, 0 if not
+   Return value: 0 on success, negative on error
+*/
+int sv_set_external_recording_active( int slot, int active ) SUNVOX_FN_ATTR;
+
+/*
+   sv_set_external_monitor_off() - 
+   Signal that monitoring is disabled (silent speakers).
+   This is used to determine if dual-pass rendering is needed.
+   Parameters:
+     slot - slot number
+     monitor_off - 1 if monitoring is OFF (silent), 0 if ON (audible)
+   Return value: 0 on success, negative on error
+*/
+int sv_set_external_monitor_off( int slot, int monitor_off ) SUNVOX_FN_ATTR;
+
+/*
+   sv_get_external_recording_buffer() - 
+   Get the recording buffer from the most recent dual-pass rendering.
+   This buffer contains full-volume microphone audio for external file writing.
+   Parameters:
+     slot - slot number
+     frames_out - pointer to receive number of frames in buffer (may be NULL)
+   Return value: pointer to recording buffer, or NULL if not available
+   Note: Buffer is float32 stereo interleaved. Valid until next audio callback.
+*/
+void* sv_get_external_recording_buffer( int slot, int* frames_out ) SUNVOX_FN_ATTR;
+
+/*
+   sv_get_input_module_recording_output() -
+   Get the recording output buffer from an Input module (full-volume mic for recording).
+   When monitor volume != recording volume, the Input module outputs to two separate buffers:
+   - Main output (channels_out): monitor volume for speakers/mixing
+   - Recording output: recording volume for file (accessed via this function)
+   Parameters:
+     slot - slot number
+     mod_num - Input module number
+     channel - output channel (0 or 1 for stereo)
+   Return value: pointer to PS_STYPE recording buffer, or NULL if not available
+*/
+void* sv_get_input_module_recording_output( int slot, int mod_num, int channel ) SUNVOX_FN_ATTR;
 
 /*
    sv_new_pattern() - create a new pattern;

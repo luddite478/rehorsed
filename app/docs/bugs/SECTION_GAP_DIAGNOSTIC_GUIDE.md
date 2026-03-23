@@ -58,7 +58,7 @@ Three new logging points have been added to help diagnose the issue:
 The new logging is already added to the code. Rebuild and run:
 
 ```bash
-cd /Users/romansmirnov/projects/fortuned
+cd /Users/romansmirnov/projects/rehorsed
 ./run.sh
 ```
 

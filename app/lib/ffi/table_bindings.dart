@@ -192,6 +192,30 @@ class TableBindings {
 
     _tableSetLayerLenPtr = lib.lookup<ffi.NativeFunction<ffi.Void Function(ffi.Int32, ffi.Int32, ffi.Int32, ffi.Int32)>>('table_set_layer_len');
     tableSetLayerLen = _tableSetLayerLenPtr.asFunction<void Function(int, int, int, int)>();
+
+    _tableSetLayerMutePtr = lib.lookup<ffi.NativeFunction<ffi.Void Function(ffi.Int32, ffi.Int32)>>('table_set_layer_mute');
+    tableSetLayerMute = _tableSetLayerMutePtr.asFunction<void Function(int, int)>();
+
+    _tableSetLayerSoloPtr = lib.lookup<ffi.NativeFunction<ffi.Void Function(ffi.Int32, ffi.Int32)>>('table_set_layer_solo');
+    tableSetLayerSolo = _tableSetLayerSoloPtr.asFunction<void Function(int, int)>();
+
+    _tableGetLayerMutePtr = lib.lookup<ffi.NativeFunction<ffi.Int32 Function(ffi.Int32)>>('table_get_layer_mute');
+    tableGetLayerMute = _tableGetLayerMutePtr.asFunction<int Function(int)>();
+
+    _tableGetLayerSoloPtr = lib.lookup<ffi.NativeFunction<ffi.Int32 Function(ffi.Int32)>>('table_get_layer_solo');
+    tableGetLayerSolo = _tableGetLayerSoloPtr.asFunction<int Function(int)>();
+
+    _tableSetLayerColMutePtr = lib.lookup<ffi.NativeFunction<ffi.Void Function(ffi.Int32, ffi.Int32, ffi.Int32)>>('table_set_layer_col_mute');
+    tableSetLayerColMute = _tableSetLayerColMutePtr.asFunction<void Function(int, int, int)>();
+
+    _tableGetLayerColMutePtr = lib.lookup<ffi.NativeFunction<ffi.Int32 Function(ffi.Int32, ffi.Int32)>>('table_get_layer_col_mute');
+    tableGetLayerColMute = _tableGetLayerColMutePtr.asFunction<int Function(int, int)>();
+
+    _tableSetLayerColSoloPtr = lib.lookup<ffi.NativeFunction<ffi.Void Function(ffi.Int32, ffi.Int32, ffi.Int32)>>('table_set_layer_col_solo');
+    tableSetLayerColSolo = _tableSetLayerColSoloPtr.asFunction<void Function(int, int, int)>();
+
+    _tableGetLayerColSoloPtr = lib.lookup<ffi.NativeFunction<ffi.Int32 Function(ffi.Int32, ffi.Int32)>>('table_get_layer_col_solo');
+    tableGetLayerColSolo = _tableGetLayerColSoloPtr.asFunction<int Function(int, int)>();
   }
 
   // pointers
@@ -268,6 +292,30 @@ class TableBindings {
 
   late final ffi.Pointer<ffi.NativeFunction<ffi.Void Function(ffi.Int32, ffi.Int32, ffi.Int32, ffi.Int32)>> _tableSetLayerLenPtr;
   late final void Function(int, int, int, int) tableSetLayerLen;
+
+  late final ffi.Pointer<ffi.NativeFunction<ffi.Void Function(ffi.Int32, ffi.Int32)>> _tableSetLayerMutePtr;
+  late final void Function(int, int) tableSetLayerMute;
+
+  late final ffi.Pointer<ffi.NativeFunction<ffi.Void Function(ffi.Int32, ffi.Int32)>> _tableSetLayerSoloPtr;
+  late final void Function(int, int) tableSetLayerSolo;
+
+  late final ffi.Pointer<ffi.NativeFunction<ffi.Int32 Function(ffi.Int32)>> _tableGetLayerMutePtr;
+  late final int Function(int) tableGetLayerMute;
+
+  late final ffi.Pointer<ffi.NativeFunction<ffi.Int32 Function(ffi.Int32)>> _tableGetLayerSoloPtr;
+  late final int Function(int) tableGetLayerSolo;
+
+  late final ffi.Pointer<ffi.NativeFunction<ffi.Void Function(ffi.Int32, ffi.Int32, ffi.Int32)>> _tableSetLayerColMutePtr;
+  late final void Function(int, int, int) tableSetLayerColMute;
+
+  late final ffi.Pointer<ffi.NativeFunction<ffi.Int32 Function(ffi.Int32, ffi.Int32)>> _tableGetLayerColMutePtr;
+  late final int Function(int, int) tableGetLayerColMute;
+
+  late final ffi.Pointer<ffi.NativeFunction<ffi.Void Function(ffi.Int32, ffi.Int32, ffi.Int32)>> _tableSetLayerColSoloPtr;
+  late final void Function(int, int, int) tableSetLayerColSolo;
+
+  late final ffi.Pointer<ffi.NativeFunction<ffi.Int32 Function(ffi.Int32, ffi.Int32)>> _tableGetLayerColSoloPtr;
+  late final int Function(int, int) tableGetLayerColSolo;
 }
 
 

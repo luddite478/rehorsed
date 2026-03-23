@@ -98,8 +98,8 @@ simple_wav_close(&g_output_writer);
 
 ## File Locations
 
-- Header: `/Users/romansmirnov/projects/fortuned/app/native/simple_wav_writer.h`
-- Implementation: `/Users/romansmirnov/projects/fortuned/app/native/simple_wav_writer.mm`
+- Header: `/Users/romansmirnov/projects/rehorsed/app/native/simple_wav_writer.h`
+- Implementation: `/Users/romansmirnov/projects/rehorsed/app/native/simple_wav_writer.mm`
 - Build configs updated: `project.pbxproj`, `CMakeLists.txt`
 
 ## Status

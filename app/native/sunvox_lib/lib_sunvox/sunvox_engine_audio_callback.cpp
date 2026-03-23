@@ -29,22 +29,10 @@ IN THE SOFTWARE.
 #include "sundog.h"
 #include "sunvox_engine.h"
 
-// ===== FORTUNED MODIFICATION: Add logging support =====
-// Note: This is a .cpp file (C++), not .mm (Objective-C++), so we use os_log directly
-#ifdef __APPLE__
-    #include <os/log.h>
-    #define SUNVOX_LOG(fmt, ...) os_log(OS_LOG_DEFAULT, "SUNVOX_ENGINE: " fmt, ##__VA_ARGS__)
-#elif defined(__ANDROID__)
-    #include <android/log.h>
-    #define SUNVOX_LOG(fmt, ...) __android_log_print(ANDROID_LOG_INFO, "SUNVOX_ENGINE", fmt, ##__VA_ARGS__)
-#else
-    #include <stdio.h>
-    #define SUNVOX_LOG(fmt, ...) printf("SUNVOX_ENGINE: " fmt "\n", ##__VA_ARGS__)
-#endif
-
-// Alias for convenience
-#define prnt SUNVOX_LOG
-
+// ===== REHORSED MODIFICATION: Use unified logging system =====
+#include "../../../log.h"
+#undef LOG_TAG
+#define LOG_TAG "SUNVOX_ENGINE"
 // ===== END MODIFICATION =====
 void sunvox_send_user_command( sunvox_user_cmd* cmd, sunvox_engine* s ) 
 {
@@ -141,7 +129,7 @@ static uint sunvox_check_speed( int offset, sunvox_engine* s )
     }
     return one_tick;
 }
-// ===== FORTUNED MODIFICATION: Helper function for pattern sequencing =====
+// ===== REHORSED MODIFICATION: Helper function for pattern sequencing =====
 static int find_next_pattern_in_sequence( int current_pat, sunvox_engine* s )
 {
     
@@ -175,7 +163,7 @@ static void sunvox_reset_timeline_activity( int offset, sunvox_engine* s )
                 sunvox_pattern* spat = s->pats[ spat_num ];
                 sunvox_pattern_info* spat_info = &s->pats_info[ spat_num ];
                 
-                // CRITICAL FIX (fortuned): Check NO_NOTES_OFF flag before clearing track_status
+                // CRITICAL FIX (rehorsed): Check NO_NOTES_OFF flag before clearing track_status
                 // When seamless looping is enabled, preserve track_status so notes continue across loop boundaries
                 bool should_clear = true;
                 if( s->flags & SUNVOX_FLAG_SUPERTRACKS )
@@ -193,7 +181,7 @@ static void sunvox_reset_timeline_activity( int offset, sunvox_engine* s )
             }
         }
     }
-    // CRITICAL FIX (fortuned): Second loop also needs to respect NO_NOTES_OFF flag
+    // CRITICAL FIX (rehorsed): Second loop also needs to respect NO_NOTES_OFF flag
     // This loop handles pattern states - need to check which pattern each state belongs to
     for( int i = 0; i < s->pat_state_size; i++ )
     {
@@ -2320,7 +2308,7 @@ static bool sunvox_render_piece_of_sound_level2(
 			    
 			    if( new_line_counter >= s->pats_info[ pnum ].x + s->pats[ pnum ]->lines )
 			    {
-				// ===== FORTUNED MODIFICATION: Pattern loop counting =====
+				// ===== REHORSED MODIFICATION: Pattern loop counting =====
 				
 				// Check if pattern has a loop limit (0 = infinite)
 				if( pnum < SUNVOX_MAX_PATTERN_LOOP_TRACKING && s->pattern_loop_counts[ pnum ] > 0 )
@@ -2347,7 +2335,7 @@ static bool sunvox_render_piece_of_sound_level2(
 					else
 					{
 					    // End of sequence - exit pattern loop mode
-					    // FORTUNED FIX: DO NOT reset counter here!
+					    // REHORSED FIX: DO NOT reset counter here!
 					    // The counter should stay at its final value (e.g., 3 for 4 loops)
 					    // so the UI can display "4/4" instead of jumping to "1/4"
 					    // The counter will be reset when playback restarts
@@ -2448,7 +2436,7 @@ static bool sunvox_render_piece_of_sound_level2(
 						    }
 						}
 					    }
-					    // CRITICAL FIX (fortuned): Only clear track_status when we actually sent note-offs
+					    // CRITICAL FIX (rehorsed): Only clear track_status when we actually sent note-offs
 					    // Otherwise notes will be lost when pattern loops with NO_NOTES_OFF flag
 					    end_pat_info->track_status = 0;
 					}
@@ -2858,51 +2846,222 @@ bool sunvox_render_piece_of_sound( sunvox_render_data* rdata, sunvox_engine* s )
     s->clipping_counter -= frames;
     if( s->clipping_counter < 0 ) 
 	s->clipping_counter = 0;
-    psynth_render_begin( rdata->out_time, s->net );
-    int ptr = 0;
-    while( 1 )
-    {
-	int size = frames - ptr;
-	if( size > s->net->max_buf_size ) size = s->net->max_buf_size;
-	if( size > 0 )
-	{
-	    rdata->frames = size;
-	    if( buffer )
-	    {
-		switch( rdata->buffer_type )
-		{
-		    case sound_buffer_int16:
-			rdata->buffer = (int16_t*)buffer + ptr * rdata->channels;
-			break;
-		    case sound_buffer_float32:
-			rdata->buffer = (float*)buffer + ptr * rdata->channels;
-			break;
-		    default:
-			break;
-		}
-	    }
-	    if( in_buffer )
-	    {
-		switch( rdata->in_type )
-		{
-		    case sound_buffer_int16:
-			rdata->in_buffer = (int16_t*)in_buffer + ptr * rdata->in_channels;
-			break;
-		    case sound_buffer_float32:
-			rdata->in_buffer = (float*)in_buffer + ptr * rdata->in_channels;
-			break;
-		    default:
-			break;
-		}
-	    }
-	    s->level1_offset = ptr;
-	    if( sunvox_render_piece_of_sound_level2( rdata, f_current_buffer, s ) )
-		rdata->silence = 0;
-	}
-	ptr += size;
-	if( ptr >= frames ) break;
+    
+    // REHORSED MODIFICATION: For now, use simple single-pass
+    // TODO: Implement Input module compensation for true independent monitoring
+    bool is_recording = (rdata->out_file_encoders && rdata->out_file_encoders[0]) || s->external_recording_active;
+    bool has_input_buffer = (in_buffer != NULL);
+    
+    static int audio_callback_log_counter = 0;
+    if (audio_callback_log_counter % 200 == 0) {
+        prnt_debug("🎛️ SINGLE-PASS: recording=%d, has_input=%d", 
+             is_recording, has_input_buffer);
     }
-    psynth_render_end( frames, s->net );
+    audio_callback_log_counter++;
+    
+    if( false )  // Old dual-pass code disabled
+    {
+        // DUAL-PASS RENDERING for independent monitoring control
+        // Pass 1: Render with MONITORING flag for speakers (uses monitor volume)
+        // Pass 2: Render with RECORDING flag for file (uses recording volume = 256)
+        
+        static int dual_pass_log_counter = 0;
+        if (dual_pass_log_counter % 200 == 0) {
+            prnt_info("🔄 Starting DUAL-PASS rendering (monitoring + recording)");
+        }
+        dual_pass_log_counter++;
+        
+        // Allocate temporary buffer for speakers (save Pass 1 result)
+        int sample_size = (rdata->buffer_type == sound_buffer_float32) ? sizeof(float) : sizeof(int16_t);
+        int buffer_bytes = frames * rdata->channels * sample_size;
+        void* speaker_buffer = smem_new( buffer_bytes );
+        
+        if( speaker_buffer )
+        {
+            // PASS 1: Render for SPEAKERS with MONITORING flag (monitor volume)
+            s->net->render_flags = PSYNTH_RENDER_FLAG_MONITORING;
+            psynth_render_begin( rdata->out_time, s->net );
+            
+            int ptr = 0;
+            while( 1 )
+            {
+                int size = frames - ptr;
+                if( size > s->net->max_buf_size ) size = s->net->max_buf_size;
+                if( size > 0 )
+                {
+                    rdata->frames = size;
+                    if( buffer )
+                    {
+                        switch( rdata->buffer_type )
+                        {
+                            case sound_buffer_int16:
+                                rdata->buffer = (int16_t*)buffer + ptr * rdata->channels;
+                                break;
+                            case sound_buffer_float32:
+                                rdata->buffer = (float*)buffer + ptr * rdata->channels;
+                                break;
+                            default:
+                                break;
+                        }
+                    }
+                    if( in_buffer )
+                    {
+                        switch( rdata->in_type )
+                        {
+                            case sound_buffer_int16:
+                                rdata->in_buffer = (int16_t*)in_buffer + ptr * rdata->in_channels;
+                                break;
+                            case sound_buffer_float32:
+                                rdata->in_buffer = (float*)in_buffer + ptr * rdata->in_channels;
+                                break;
+                            default:
+                                break;
+                        }
+                    }
+                    s->level1_offset = ptr;
+                    if( sunvox_render_piece_of_sound_level2( rdata, f_current_buffer, s ) )
+                        rdata->silence = 0;
+                }
+                ptr += size;
+                if( ptr >= frames ) break;
+            }
+            psynth_render_end( frames, s->net );
+            
+            // Save Pass 1 output (speakers with monitor volume) to speaker_buffer
+            smem_copy( speaker_buffer, buffer, buffer_bytes );
+            
+            // PASS 2: Render for FILE with RECORDING flag (recording volume = 256)
+            // This pass will overwrite rdata->buffer, and file encoders will use it
+            s->net->render_flags = PSYNTH_RENDER_FLAG_RECORDING;
+            psynth_render_begin( rdata->out_time, s->net );
+            
+            ptr = 0;
+            while( 1 )
+            {
+                int size = frames - ptr;
+                if( size > s->net->max_buf_size ) size = s->net->max_buf_size;
+                if( size > 0 )
+                {
+                    rdata->frames = size;
+                    if( buffer )
+                    {
+                        switch( rdata->buffer_type )
+                        {
+                            case sound_buffer_int16:
+                                rdata->buffer = (int16_t*)buffer + ptr * rdata->channels;
+                                break;
+                            case sound_buffer_float32:
+                                rdata->buffer = (float*)buffer + ptr * rdata->channels;
+                                break;
+                            default:
+                                break;
+                        }
+                    }
+                    if( in_buffer )
+                    {
+                        switch( rdata->in_type )
+                        {
+                            case sound_buffer_int16:
+                                rdata->in_buffer = (int16_t*)in_buffer + ptr * rdata->in_channels;
+                                break;
+                            case sound_buffer_float32:
+                                rdata->in_buffer = (float*)in_buffer + ptr * rdata->in_channels;
+                                break;
+                            default:
+                                break;
+                        }
+                    }
+                    s->level1_offset = ptr;
+                    sunvox_render_piece_of_sound_level2( rdata, f_current_buffer, s );
+                    // File encoding happens inside level2, so file gets recording volume ✓
+                }
+                ptr += size;
+                if( ptr >= frames ) break;
+            }
+            psynth_render_end( frames, s->net );
+            
+            // REHORSED MODIFICATION: Handle both internal and external recording
+            bool has_internal_encoders = (rdata->out_file_encoders && rdata->out_file_encoders[0]);
+            
+            // REHORSED: Old dual-pass code removed - using Input module dual-output instead
+            // Restore MONITORING pass to main buffer for speakers
+            smem_copy( buffer, speaker_buffer, buffer_bytes );
+            
+            rdata->buffer = buffer;
+            rdata->frames = frames;
+            
+            // Free temporary speaker buffer
+            smem_free( speaker_buffer );
+        }
+        else
+        {
+            // Allocation failed, fall back to single-pass with MONITORING
+            s->net->render_flags = PSYNTH_RENDER_FLAG_MONITORING;
+            goto single_pass_rendering;
+        }
+    }
+    else
+    {
+        // SINGLE-PASS RENDERING (normal case: not recording, or no mic input)
+        static int single_pass_log_counter = 0;
+        if (single_pass_log_counter % 200 == 0) {
+            prnt_debug("⚫ SINGLE-PASS rendering (normal mode)");
+        }
+        single_pass_log_counter++;
+        
+        single_pass_rendering:
+        s->net->render_flags = PSYNTH_RENDER_FLAG_MONITORING;
+        psynth_render_begin( rdata->out_time, s->net );
+        
+        int ptr = 0;
+        while( 1 )
+        {
+            int size = frames - ptr;
+            if( size > s->net->max_buf_size ) size = s->net->max_buf_size;
+            if( size > 0 )
+            {
+                rdata->frames = size;
+                if( buffer )
+                {
+                    switch( rdata->buffer_type )
+                    {
+                        case sound_buffer_int16:
+                            rdata->buffer = (int16_t*)buffer + ptr * rdata->channels;
+                            break;
+                        case sound_buffer_float32:
+                            rdata->buffer = (float*)buffer + ptr * rdata->channels;
+                            break;
+                        default:
+                            break;
+                        }
+                }
+                if( in_buffer )
+                {
+                    switch( rdata->in_type )
+                    {
+                        case sound_buffer_int16:
+                            rdata->in_buffer = (int16_t*)in_buffer + ptr * rdata->in_channels;
+                            break;
+                        case sound_buffer_float32:
+                            rdata->in_buffer = (float*)in_buffer + ptr * rdata->in_channels;
+                            break;
+                        default:
+                            break;
+                    }
+                }
+                s->level1_offset = ptr;
+                if( sunvox_render_piece_of_sound_level2( rdata, f_current_buffer, s ) )
+                    rdata->silence = 0;
+            }
+            ptr += size;
+            if( ptr >= frames ) break;
+        }
+        psynth_render_end( frames, s->net );
+    }
+    
+    // Reset render flags to normal after rendering
+    s->net->render_flags = PSYNTH_RENDER_FLAG_NORMAL;
+    
     return 1;
 }
 int sunvox_frames_get_value( int channel, stime_ticks_t t, sunvox_engine* s )

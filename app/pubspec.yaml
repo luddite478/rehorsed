@@ -1,9 +1,10 @@
 description: A new Flutter project.
 environment:
   sdk: '>=3.4.4 <4.0.0'
-version: 1.0.0+1
+version: 1.0.0+2
 flutter:
   assets:
+    - samples/acoustic/
     - samples/drums/
     - samples/drums/Kick/
     - samples/drums/Plates/
@@ -14,6 +15,9 @@ flutter:
     - samples/drums/Plates/Splash/
     - samples/drums/Snare/
     - samples/drums/Toms/
+    - samples/noise/
+    - samples/noise/click/
+    - samples/noise/other/
     - samples/synth/
     - samples/synth/Bass/
     - samples/synth/Lead/
@@ -28,7 +32,6 @@ dependencies:
     sdk: flutter
   file_picker: ^8.0.7
   cupertino_icons: ^1.0.6
-  http: ^1.1.0
   google_fonts: ^6.1.0
   flutter_dotenv: ^5.1.0
   docman: ^1.2.0
@@ -38,11 +41,11 @@ dependencies:
   share_plus: ^7.2.2
   shared_preferences: ^2.2.2
   just_audio: ^0.9.36
-  connectivity_plus: ^7.0.0
-  app_links: ^6.2.0
   crypto: ^3.0.5
   wheel_chooser: ^1.1.2
-name: fortuned
+  uuid: ^4.5.1
+  permission_handler: ^11.3.1
+name: rehorsed
 publish_to: none
 dev_dependencies:
   flutter_test:
@@ -53,5 +56,5 @@ dev_dependencies:
 flutter_launcher_icons:
   android: true
   ios: true
-  image_path: "icons/app_icon.png"
+  image_path: "icons/rehorsed.png"
   remove_alpha_ios: true

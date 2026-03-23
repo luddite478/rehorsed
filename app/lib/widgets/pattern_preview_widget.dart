@@ -1,10 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../utils/app_colors.dart';
-import '../models/thread/thread.dart';
 
 class PatternPreviewWidget extends StatelessWidget {
-  final Thread project;
+  final dynamic project; // Can be Pattern or any object with an 'id' field
   final Future<Map<String, dynamic>?> Function(String) getProjectSnapshot;
   final List<Color> Function(Map<String, dynamic>) getSampleBankColors;
   final Color? fadeOverlayColor; // Background color to use for fade overlays (defaults to white)
@@ -38,7 +37,7 @@ class PatternPreviewWidget extends StatelessWidget {
   // - 12-16: Good for mobile phones
   // - 16-20: Good for tablets
   // - 20-24: Maximum detail (may be cramped on phones)
-  static const int maxPatternRows = 40;  // Increased from adaptive calculation
+  static const int maxPatternRows = 16;  // Keep previews compact for list cards
   
   // Pattern preview fade gradient (horizontal)
   // Gradient now spans 17 columns to cover column 17

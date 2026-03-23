@@ -15,6 +15,9 @@ class SampleBrowserState extends ChangeNotifier {
   Map<String, dynamic>? _manifestData;
   int? _targetStep;
   int? _targetCol;
+  /// Bank slot for load/place (A–Z index). When null, UI should use [SampleBankState.activeSlot].
+  /// [targetCol] is only the grid column; conflating the two made every cell in a column share one color.
+  int? _targetBankSlot;
   
   bool get isVisible => _isVisible;
   bool get isLoading => _isLoading;
@@ -22,6 +25,7 @@ class SampleBrowserState extends ChangeNotifier {
   List<SampleItem> get currentItems => _currentItems;
   int? get targetStep => _targetStep;
   int? get targetCol => _targetCol;
+  int? get targetBankSlot => _targetBankSlot;
   
   // Initialize the sample browser with manifest data
   Future<void> initialize() async {
@@ -52,21 +56,51 @@ class SampleBrowserState extends ChangeNotifier {
   }
   
   // Show the sample browser for a specific cell
-  void showForCell(int step, int col) {
+  void showForCell(int step, int col, {int? bankSlot}) {
     _targetStep = step;
     _targetCol = col;
+    _targetBankSlot = bankSlot;
     _isVisible = true;
     notifyListeners();
-    Log.d('📁 Showing sample browser for cell [$step, $col]');
+    Log.d('📁 Showing sample browser for cell [$step, $col] bankSlot=$bankSlot');
   }
   
   // Show for a sample bank slot (V2 compatibility)
   void showForSlot(int slot) {
     _targetStep = null;
     _targetCol = slot; // Reuse targetCol for slot
+    _targetBankSlot = slot;
     _isVisible = true;
     notifyListeners();
     Log.d('📁 Showing sample browser for slot $slot');
+  }
+
+  /// Navigate browser to the folder that contains [samplePath].
+  /// Accepts both manifest-style paths (samples/...) and absolute paths
+  /// that include a /samples/ segment.
+  void navigateToSamplePath(String? samplePath) {
+    if (samplePath == null || samplePath.trim().isEmpty) return;
+
+    final normalized = samplePath.replaceAll('\\', '/');
+    final markerIndex = normalized.indexOf('samples/');
+    if (markerIndex < 0) {
+      Log.d('📁 Sample path has no samples/ segment, keeping current path: $samplePath');
+      return;
+    }
+
+    final relative = normalized.substring(markerIndex + 'samples/'.length);
+    if (relative.isEmpty) {
+      _currentPath = [];
+      _refreshCurrentItems();
+      Log.d('📁 Navigated to samples root from path: $samplePath');
+      return;
+    }
+
+    final parts = relative.split('/').where((p) => p.isNotEmpty).toList();
+    final hasFileName = parts.isNotEmpty && parts.last.contains('.');
+    _currentPath = hasFileName ? parts.sublist(0, parts.length - 1) : parts;
+    _refreshCurrentItems();
+    Log.d('📁 Navigated to sample folder: ${_currentPath.join('/')}');
   }
   
   // Hide the sample browser
@@ -74,6 +108,7 @@ class SampleBrowserState extends ChangeNotifier {
     _isVisible = false;
     _targetStep = null;
     _targetCol = null;
+    _targetBankSlot = null;
     notifyListeners();
     Log.d('📁 Sample browser hidden');
   }

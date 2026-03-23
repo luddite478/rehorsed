@@ -48,6 +48,39 @@ static int g_song_mode = 0; // 0 = loop mode, 1 = song mode
 static int g_current_section = 0; // Current section for loop mode
 static int g_updating_timeline = 0; // Recursion guard for update_timeline
 
+static int any_layer_solo_active() {
+    for (int l = 0; l < MAX_LAYERS_PER_SECTION; l++) {
+        if (table_get_layer_solo(l)) return 1;
+    }
+    return 0;
+}
+
+static int any_col_solo_active_for_layer(int layer) {
+    if (layer < 0 || layer >= MAX_LAYERS_PER_SECTION) return 0;
+    for (int c = 0; c < MAX_COLS_PER_LAYER; c++) {
+        if (table_get_layer_col_solo(layer, c)) return 1;
+    }
+    return 0;
+}
+
+// Unified audible rule for layer/column mute+solo.
+static int sunvox_wrapper_is_cell_audible(int section, int col) {
+    const int layer = table_get_layer_for_col(section, col);
+    const int col_in_layer = table_get_col_in_layer(section, col);
+    if (layer < 0 || col_in_layer < 0) return 0;
+
+    if (table_get_layer_mute(layer)) return 0;
+    if (table_get_layer_col_mute(layer, col_in_layer)) return 0;
+
+    const int any_layer_solo = any_layer_solo_active();
+    if (any_layer_solo && !table_get_layer_solo(layer)) return 0;
+
+    const int any_col_solo_for_layer = any_col_solo_active_for_layer(layer);
+    if (any_col_solo_for_layer && !table_get_layer_col_solo(layer, col_in_layer)) return 0;
+
+    return 1;
+}
+
 // Initialize SunVox engine
 int sunvox_wrapper_init(void) {
     prnt_debug("🎵 [SUNVOX] Initializing SunVox wrapper (NEW LIBRARY - Oct 14 2025)");
@@ -187,8 +220,12 @@ int sunvox_wrapper_init(void) {
     // Set autostop off (patterns will loop automatically)
     sv_set_autostop(SUNVOX_SLOT, 0);
 
-    // Get initial BPM
+    // Get initial BPM (unused but kept for reference)
     int initial_bpm = sv_get_song_bpm(SUNVOX_SLOT);
+    (void)initial_bpm;
+    
+    // NOTE: Input module removed - mic recording now bypasses SunVox entirely
+    // See docs/features/microphone_dual_output_architecture.md for the archived approach
     
     g_sunvox_initialized = 1;
     return 0;
@@ -203,7 +240,7 @@ void sunvox_wrapper_cleanup(void) {
     // Stop playback
     sv_stop(SUNVOX_SLOT);
     
-    // Close slot
+    // Close slot (this automatically removes all modules including Input)
     sv_close_slot(SUNVOX_SLOT);
     
     // Deinit SunVox
@@ -311,7 +348,8 @@ void sunvox_wrapper_sync_cell(int step, int col) {
     
     sv_lock_slot(SUNVOX_SLOT);
     
-    if (cell->sample_slot >= 0 && cell->sample_slot < MAX_SAMPLE_SLOTS) {
+    const int should_mute = !sunvox_wrapper_is_cell_audible(section_index, col);
+    if (!should_mute && cell->sample_slot >= 0 && cell->sample_slot < MAX_SAMPLE_SLOTS) {
         // Cell has a sample - write note event
         int mod_id = g_sampler_modules[cell->sample_slot];
         if (mod_id >= 0) {
@@ -345,23 +383,44 @@ void sunvox_wrapper_sync_cell(int step, int col) {
             if (final_note < 0) final_note = 0;
             if (final_note > 127) final_note = 127;
             
-            int result = sv_set_pattern_event(
-                SUNVOX_SLOT,
-                pat_id,              // section's pattern
-                col,                 // track
-                local_line,          // line within pattern
-                final_note,          // note
-                velocity,            // velocity
-                mod_id + 1,          // module (1-indexed)
-                0,                   // no controller/effect
-                0                    // no parameter
-            );
+            // Get sample offset from sample bank (if any)
+            int offset_frames = 0;
+            Sample* sample = sample_bank_get_sample(cell->sample_slot);
+            if (sample && sample->loaded) {
+                offset_frames = sample->offset_frames;
+            }
             
-            if (result == 0) {
-                prnt_debug("📝 [SUNVOX] Set pattern event [section=%d, line=%d, col=%d]: note=%d, vel=%d, mod=%d",
-                     section_index, local_line, col, final_note, velocity, mod_id + 1);
+            // Use offset-aware event setter if offset is non-zero
+            if (offset_frames > 0) {
+                // Unlock before calling the offset function (it locks internally)
+                sv_unlock_slot(SUNVOX_SLOT);
+                sunvox_wrapper_set_pattern_event_with_offset(
+                    pat_id, col, local_line, final_note, velocity,
+                    cell->sample_slot, offset_frames  // Pass sample slot, not mod_id
+                );
+                sv_lock_slot(SUNVOX_SLOT);
+                prnt_debug("📝 [SUNVOX] Set pattern event with offset [section=%d, line=%d, col=%d]: note=%d, vel=%d, slot=%d, offset=%d",
+                     section_index, local_line, col, final_note, velocity, cell->sample_slot, offset_frames);
             } else {
-                prnt_err("❌ [SUNVOX] Failed to set pattern event: %d", result);
+                // Regular event without offset
+                int result = sv_set_pattern_event(
+                    SUNVOX_SLOT,
+                    pat_id,              // section's pattern
+                    col,                 // track
+                    local_line,          // line within pattern
+                    final_note,          // note
+                    velocity,            // velocity
+                    mod_id + 1,          // module (1-indexed)
+                    0,                   // no controller/effect
+                    0                    // no parameter
+                );
+                
+                if (result == 0) {
+                    prnt_debug("📝 [SUNVOX] Set pattern event [section=%d, line=%d, col=%d]: note=%d, vel=%d, mod=%d",
+                         section_index, local_line, col, final_note, velocity, mod_id + 1);
+                } else {
+                    prnt_err("❌ [SUNVOX] Failed to set pattern event: %d", result);
+                }
             }
         }
     } else {
@@ -376,6 +435,79 @@ void sunvox_wrapper_sync_cell(int step, int col) {
     }
     
     sv_unlock_slot(SUNVOX_SLOT);
+}
+
+// Set pattern event with sample offset effects (09xx coarse, 07xx fine)
+// This enables precise sample positioning with sub-step accuracy
+// Accepts sample_slot instead of mod_id, looks up the module internally
+void sunvox_wrapper_set_pattern_event_with_offset(
+    int pat_id, 
+    int track, 
+    int line, 
+    int note,
+    int velocity, 
+    int sample_slot,  // Changed: now accepts sample slot, not module ID
+    int offset_frames
+) {
+    if (!g_sunvox_initialized) return;
+    
+    // Look up the module ID for this sample slot
+    if (sample_slot < 0 || sample_slot >= MAX_SAMPLE_SLOTS) {
+        prnt_err("❌ [SUNVOX] Invalid sample slot for offset: %d", sample_slot);
+        return;
+    }
+    
+    int mod_id = g_sampler_modules[sample_slot];
+    if (mod_id < 0) {
+        prnt_err("❌ [SUNVOX] No sampler module for slot %d", sample_slot);
+        return;
+    }
+    
+    // Split offset into coarse and fine components
+    // Coarse (09xx): multiplied by 256 internally by SunVox
+    // Fine (07xx): direct frame count (0-255)
+    int coarse = offset_frames / 256;
+    int fine = offset_frames % 256;
+    
+    // Clamp to valid ranges (0-255 for both)
+    if (coarse > 255) coarse = 255;
+    if (fine > 255) fine = 255;
+    
+    sv_lock_slot(SUNVOX_SLOT);
+    
+    // Set main note with coarse offset (effect 09xx)
+    if (coarse > 0) {
+        sv_set_pattern_event(
+            SUNVOX_SLOT, pat_id, track, line,
+            note, velocity, mod_id + 1,
+            0x0900, // Effect 09 (coarse offset)
+            coarse  // Multiplied by 256 internally
+        );
+        prnt_debug("🎯 [SUNVOX] Set note with coarse offset 09%02X at line=%d track=%d slot=%d mod=%d", 
+                   coarse, line, track, sample_slot, mod_id);
+    } else {
+        // No offset, just regular note
+        sv_set_pattern_event(
+            SUNVOX_SLOT, pat_id, track, line,
+            note, velocity, mod_id + 1, 0, 0
+        );
+    }
+    
+    // Set fine offset on next track if needed and available
+    if (fine > 0 && track + 1 < table_get_max_cols()) {
+        sv_set_pattern_event(
+            SUNVOX_SLOT, pat_id, track + 1, line,
+            0, 0, mod_id + 1, // Same module, no note
+            0x0700, // Effect 07 (fine offset)
+            fine
+        );
+        prnt_debug("🎯 [SUNVOX] Set fine offset 07%02X at line=%d track=%d", fine, line, track + 1);
+    }
+    
+    sv_unlock_slot(SUNVOX_SLOT);
+    
+    prnt_debug("🎯 [SUNVOX] Set event with offset: slot=%d mod=%d line=%d frames=%d (coarse=%d, fine=%d)",
+               sample_slot, mod_id, line, offset_frames, coarse, fine);
 }
 
 // Sync entire table to SunVox pattern
@@ -605,8 +737,13 @@ void sunvox_wrapper_sync_section(int section_index) {
             Cell* cell = table_get_cell(global_step, col);
             
             sv_lock_slot(SUNVOX_SLOT);
-            
-            if (!cell || cell->sample_slot == -1) {
+
+            // Respect layer/column mute+solo while building SunVox patterns.
+            // Global layer solo: if any layer is soloed, only layer-soloed layers are audible.
+            // Per-layer column solo: if any column in that layer is soloed, only soloed columns there.
+            int should_mute = !sunvox_wrapper_is_cell_audible(section_index, col);
+
+            if (should_mute || !cell || cell->sample_slot == -1) {
                 // Empty cell - clear pattern event
                 sv_set_pattern_event(SUNVOX_SLOT, pat_id, col, local_line, 
                                     0, 0, 0, 0, 0);
@@ -1034,7 +1171,18 @@ void sunvox_wrapper_stop(void) {
     if (!g_sunvox_initialized) return;
     
     prnt_debug("⏹️ [SUNVOX] Stopping playback");
+    
+    // Send all notes off on all tracks to immediately stop all playing sounds
+    sv_lock_slot(SUNVOX_SLOT);
+    for (int track = 0; track < table_get_max_cols(); track++) {
+        // Send NOTE_OFF (128) to all modules on this track
+        sv_send_event(SUNVOX_SLOT, track, 128, 0, 0, 0, 0);
+    }
+    sv_unlock_slot(SUNVOX_SLOT);
+    
     sv_stop(SUNVOX_SLOT);
+    
+    prnt_debug("✅ [SUNVOX] Stopped playback and sent all notes off");
 }
 
 // Set BPM
@@ -1130,6 +1278,9 @@ void sunvox_wrapper_trigger_step(int step) {
     
     prnt_debug("🎯 [SUNVOX] Triggering notes at step %d", step);
     
+    int section = table_get_section_at_step(step);
+    if (section < 0) return;
+
     sv_lock_slot(SUNVOX_SLOT);
     
     int max_cols = table_get_max_cols();
@@ -1138,6 +1289,8 @@ void sunvox_wrapper_trigger_step(int step) {
         if (!cell || cell->sample_slot == -1) {
             continue; // Empty cell
         }
+
+        if (!sunvox_wrapper_is_cell_audible(section, col)) continue;
         
         int mod_id = g_sampler_modules[cell->sample_slot];
         if (mod_id < 0) {
@@ -1391,4 +1544,16 @@ extern "C" int sunvox_preview_cell(int step, int column, float pitch, float volu
     g_preview_track = track;
     g_preview_note = note;
     return 0;
+}
+
+// ===== Microphone Input Module Management =====
+// NOTE: Input module removed - mic recording now bypasses SunVox entirely
+// Mic audio is captured directly to WAV file without going through SunVox
+// See docs/features/microphone_dual_output_architecture.md for archived approach
+
+// Wrapper for SunVox sv_get_module_scope2 (for waveform visualization)
+// This wrapper is needed to expose the SunVox function through FFI with proper visibility
+uint32_t sunvox_wrapper_get_module_scope2(int slot, int mod_num, int channel, int16_t* dest_buf, uint32_t samples_to_read) {
+    // Forward call to actual SunVox function (already available from sunvox.h)
+    return sv_get_module_scope2(slot, mod_num, channel, dest_buf, samples_to_read);
 }

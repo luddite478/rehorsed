@@ -76,8 +76,8 @@ class SnapshotExporter {
     final layersBase = statePtr.ref.layers_ptr;
     for (int s = 0; s < sectionsCount; s++) {
       final sectionLayers = <int>[];
-      for (int l = 0; l < 4; l++) { // MAX_LAYERS_PER_SECTION = 4
-        final li = s * 4 + l;
+      for (int l = 0; l < TableState.maxLayersPerSection; l++) {
+        final li = s * TableState.maxLayersPerSection + l;
         sectionLayers.add((layersBase + li).ref.len);
       }
       layers.add(sectionLayers);
@@ -106,11 +106,19 @@ class SnapshotExporter {
       table_cells.add(row);
     }
 
+    // Export layer modes (per-layer operational mode: sequence or rec)
+    final layerModes = <String, String>{};
+    for (int layer = 0; layer < TableState.maxLayersPerSection; layer++) {
+      final mode = _tableState.getLayerMode(layer);
+      layerModes[layer.toString()] = mode.name;
+    }
+
     return {
       'sections_count': sectionsCount,
       'sections': sections,
       'layers': layers,
       'table_cells': table_cells,
+      'layer_modes': layerModes,
     };
   }
 

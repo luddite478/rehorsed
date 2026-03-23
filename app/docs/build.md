@@ -1,6 +1,6 @@
 # Building and Environment Configuration
 
-This document outlines the process for building the Fortuned app for different environments (`stage` and `prod`), with a focus on how deep linking domains are configured for each platform.
+This document outlines the process for building the Rehorsed app for different environments (`stage` and `prod`), with a focus on how deep linking domains are configured for each platform.
 
 ## iOS Builds
 

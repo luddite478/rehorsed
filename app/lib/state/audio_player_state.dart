@@ -1,8 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:just_audio/just_audio.dart';
-import '../models/thread/message.dart';
 import '../services/audio_cache_service.dart';
-// import '../sequencer_library.dart';
 
 enum LoopMode {
   off,        // No looping
@@ -10,16 +8,14 @@ enum LoopMode {
   playlist,   // Loop whole playlist
 }
 
-/// State for playing audio from messages (renders)
+/// State for playing audio from local files
 /// Uses just_audio for full playback control with seeking
 class AudioPlayerState extends ChangeNotifier {
   final AudioPlayer _audioPlayer = AudioPlayer();
   
-  String? _currentlyPlayingMessageId;
-  String? _currentlyPlayingRenderId;
+  String? _currentlyPlayingItemId;
   bool _isPlaying = false;
   bool _isLoading = false;
-  double _downloadProgress = 0.0;
   String? _error;
   Duration _duration = Duration.zero;
   Duration _position = Duration.zero;
@@ -84,14 +80,10 @@ class AudioPlayerState extends ChangeNotifier {
     }
   }
 
-  // void _ensureAudioSession() {}
-
   // Getters
-  String? get currentlyPlayingMessageId => _currentlyPlayingMessageId;
-  String? get currentlyPlayingRenderId => _currentlyPlayingRenderId;
+  String? get currentlyPlayingItemId => _currentlyPlayingItemId;
   bool get isPlaying => _isPlaying;
   bool get isLoading => _isLoading;
-  double get downloadProgress => _downloadProgress;
   String? get error => _error;
   Duration get duration => _duration;
   Duration get position => _position;
@@ -144,16 +136,12 @@ class AudioPlayerState extends ChangeNotifier {
     _onPreviousTrack?.call();
   }
 
-  bool isPlayingRender(String messageId, String renderId) {
-    return _currentlyPlayingMessageId == messageId && 
-           _currentlyPlayingRenderId == renderId && 
-           _isPlaying;
+  bool isPlayingItem(String itemId) {
+    return _currentlyPlayingItemId == itemId && _isPlaying;
   }
 
-  bool isLoadingRender(String messageId, String renderId) {
-    return _currentlyPlayingMessageId == messageId && 
-           _currentlyPlayingRenderId == renderId && 
-           _isLoading;
+  bool isLoadingItem(String itemId) {
+    return _currentlyPlayingItemId == itemId && _isLoading;
   }
 
   // Check if track is at end or completed
@@ -177,23 +165,20 @@ class AudioPlayerState extends ChangeNotifier {
     await _audioPlayer.play();
   }
 
-  /// Play a render from a message (library, thread, or profile)
-  Future<void> playRender({
-    required String messageId,
-    required Render render,
-    String? localPathIfRecorded,
+  /// Play audio from a local file path
+  Future<void> playFromPath({
+    required String itemId,
+    required String localPath,
   }) async {
     try {
-      // Pause if already playing this render
-      if (isPlayingRender(messageId, render.id)) {
+      // Pause if already playing this item
+      if (isPlayingItem(itemId)) {
         await _audioPlayer.pause();
         return;
       }
 
-      // Resume or reload if same render is loaded but not playing
-      if (_currentlyPlayingMessageId == messageId && 
-          _currentlyPlayingRenderId == render.id && 
-          !_isPlaying) {
+      // Resume or reload if same item is loaded but not playing
+      if (_currentlyPlayingItemId == itemId && !_isPlaying) {
         if (_isTrackAtEnd) {
           await _reloadAndPlay();
         } else {
@@ -202,13 +187,11 @@ class AudioPlayerState extends ChangeNotifier {
         return;
       }
 
-      // Load new render
+      // Load new item
       final wasPlaying = _isPlaying;
-      _currentlyPlayingMessageId = messageId;
-      _currentlyPlayingRenderId = render.id;
+      _currentlyPlayingItemId = itemId;
       _isLoading = true;
       _isPlaying = false;
-      _downloadProgress = 0.0;
       _error = null;
       _position = Duration.zero;
       _duration = Duration.zero;
@@ -218,17 +201,11 @@ class AudioPlayerState extends ChangeNotifier {
         await _audioPlayer.stop();
       }
 
-      final playablePath = await AudioCacheService.getPlayablePath(
-        render,
-        localPathIfRecorded: localPathIfRecorded,
-        onProgress: (progress) {
-          _downloadProgress = progress;
-          notifyListeners();
-        },
-      );
+      // Get playable path (validates file exists)
+      final playablePath = await AudioCacheService.getPlayablePath(localPath);
 
       if (playablePath == null) {
-        _error = 'Failed to load audio';
+        _error = 'Audio file not found';
         _isLoading = false;
         notifyListeners();
         return;
@@ -249,6 +226,7 @@ class AudioPlayerState extends ChangeNotifier {
       _isLoading = false;
       _isPlaying = false;
       notifyListeners();
+      debugPrint('❌ [AUDIO_PLAYER] Error playing audio: $e');
     }
   }
 
@@ -257,7 +235,7 @@ class AudioPlayerState extends ChangeNotifier {
     try {
       await _audioPlayer.seek(position);
     } catch (e) {
-      // Silently handle seek errors
+      debugPrint('❌ [AUDIO_PLAYER] Seek error: $e');
     }
   }
 
@@ -266,7 +244,7 @@ class AudioPlayerState extends ChangeNotifier {
     try {
       await _audioPlayer.pause();
     } catch (e) {
-      // Silently handle pause errors
+      debugPrint('❌ [AUDIO_PLAYER] Pause error: $e');
     }
   }
 
@@ -279,7 +257,7 @@ class AudioPlayerState extends ChangeNotifier {
         await _audioPlayer.play();
       }
     } catch (e) {
-      // Silently handle resume errors
+      debugPrint('❌ [AUDIO_PLAYER] Resume error: $e');
     }
   }
 
@@ -288,13 +266,12 @@ class AudioPlayerState extends ChangeNotifier {
     try {
       await _audioPlayer.stop();
       _isPlaying = false;
-      _currentlyPlayingMessageId = null;
-      _currentlyPlayingRenderId = null;
+      _currentlyPlayingItemId = null;
       _lastLoadedFilePath = null;
       _position = Duration.zero;
       notifyListeners();
     } catch (e) {
-      // Silently handle stop errors
+      debugPrint('❌ [AUDIO_PLAYER] Stop error: $e');
     }
   }
 

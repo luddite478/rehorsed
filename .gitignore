@@ -99,6 +99,7 @@ app/.flutter-plugins-dependencies
 # Uncomment if you don't want to track VS Code settings
 # app/.vscode/
 app/working_example
+app/.ios_build_number
 
 # Environment files
 **/*.env
@@ -117,7 +118,7 @@ app/ios/ThirdParty/
 .dart_tool/
 .flutter-plugins-dependencies
 .metadata
-fortuned.iml
+rehorsed.iml
 build
 
 nginx/letsencrypt/*

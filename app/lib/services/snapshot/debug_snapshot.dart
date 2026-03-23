@@ -19,8 +19,8 @@ class SnapshotDebugger {
       // Print layer configuration
       final statePtr = tableState.getTableStatePtr();
       final layersBase = statePtr.ref.layers_ptr;
-      for (int l = 0; l < 4; l++) {
-        final li = i * 4 + l;
+      for (int l = 0; l < TableState.maxLayersPerSection; l++) {
+        final li = i * TableState.maxLayersPerSection + l;
         final len = (layersBase + li).ref.len;
         debugPrint('  Layer $l: $len columns');
       }

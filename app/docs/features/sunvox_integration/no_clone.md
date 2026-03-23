@@ -6,7 +6,7 @@
 
 ## 1. Overview
 
-This document provides a comprehensive guide to the "no-clone" sequencer implementation in Fortuned. This approach eliminates the need for creating duplicate (cloned) patterns for looping, instead managing playback via sample-accurate loop counting and sequence management directly within the SunVox audio engine.
+This document provides a comprehensive guide to the "no-clone" sequencer implementation in Rehorsed. This approach eliminates the need for creating duplicate (cloned) patterns for looping, instead managing playback via sample-accurate loop counting and sequence management directly within the SunVox audio engine.
 
 This new system is simpler, more memory-efficient, and provides sample-accurate transitions, resolving previous issues with audio glitches and complex timeline management.
 
@@ -95,21 +95,21 @@ To use the no-clone solution, the modified SunVox static library must be rebuilt
 
 ### iOS
 ```bash
-cd /Users/romansmirnov/projects/fortuned/app/native/sunvox_lib/sunvox_lib/make
+cd /Users/romansmirnov/projects/rehorsed/app/native/sunvox_lib/sunvox_lib/make
 bash MAKE_IOS
 ```
-**Output:** `/Users/romansmirnov/projects/fortuned/app/native/sunvox_lib/sunvox_lib/ios/libsunvox.a`
+**Output:** `/Users/romansmirnov/projects/rehorsed/app/native/sunvox_lib/sunvox_lib/ios/libsunvox.a`
 
 ### Android
 ```bash
-cd /Users/romansmirnov/projects/fortuned/app/native/sunvox_lib/sunvox_lib/make
+cd /Users/romansmirnov/projects/rehorsed/app/native/sunvox_lib/sunvox_lib/make
 bash MAKE_ANDROID
 ```
 **Output:** `../android/lib_*/libsunvox.so`
 
 After rebuilding the library, clean and rebuild the Flutter application:
 ```bash
-cd /Users/romansmirnov/projects/fortuned/app
+cd /Users/romansmirnov/projects/rehorsed/app
 flutter clean
 flutter pub get
 flutter run

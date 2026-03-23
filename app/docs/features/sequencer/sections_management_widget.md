@@ -8,7 +8,7 @@
 
 ## Overview
 
-The Sections Management Widget provides an intuitive interface for managing song sections in Fortuned. It's implemented as a submenu within the multitask panel (similar to sound settings menus) and displays sections as a horizontal scrollable tape with inline add functionality. All section operations maintain seamless audio playback.
+The Sections Management Widget provides an intuitive interface for managing song sections in Rehorsed. It's implemented as a submenu within the multitask panel (similar to sound settings menus) and displays sections as a horizontal scrollable tape with inline add functionality. All section operations maintain seamless audio playback.
 
 ---
 

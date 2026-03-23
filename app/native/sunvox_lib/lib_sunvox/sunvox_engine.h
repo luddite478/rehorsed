@@ -31,7 +31,7 @@ typedef uint32_t 		sv_pat_track_bits; //Pattern tracks (bit per track): 1 - afte
 #define MAX_MODULE_LAYERS	( 1 << MODULE_LAYERS_BITS )
 #define SUNVOX_TPB		24 //ticks per beat
 
-// ===== FORTUNED MODIFICATION: Pattern loop counting constants =====
+// ===== REHORSED MODIFICATION: Pattern loop counting constants =====
 #define SUNVOX_MAX_PATTERN_LOOP_TRACKING  256  // Max patterns that can have loop counts
 #define SUNVOX_MAX_PATTERN_SEQUENCE       64   // Max patterns in playback sequence
 // ===== END MODIFICATION =====
@@ -502,6 +502,10 @@ struct sunvox_engine
     uint32_t		flags; //SUNVOX_FLAG_* ; it's not recommended to change these flags directly from the UI thread! At least use LOCK/UNLOCK
     uint32_t		sync_flags;
     int 		freq;
+    
+    // REHORSED MODIFICATION: External recording flag (for future use)
+    volatile bool	external_recording_active;
+    volatile bool	external_monitor_off;  // True if monitoring is disabled (silent speakers)
 
     int			level1_offset;
 
@@ -525,7 +529,7 @@ struct sunvox_engine
     int			restart_pos; //Project restart position
     bool	    	stop_at_the_end_of_proj;
 
-    // ===== FORTUNED MODIFICATION: Pattern loop counting =====
+    // ===== REHORSED MODIFICATION: Pattern loop counting =====
     int			pattern_loop_counts[ SUNVOX_MAX_PATTERN_LOOP_TRACKING ];    // Loop count per pattern (0 = infinite)
     int			pattern_current_loop[ SUNVOX_MAX_PATTERN_LOOP_TRACKING ];   // Current loop iteration per pattern
     int			pattern_sequence[ SUNVOX_MAX_PATTERN_SEQUENCE ];            // Pattern playback order for song mode
@@ -691,6 +695,8 @@ struct sunvox_render_data
     stime_ticks_t		out_time; //output time; see description in sundog_sound (sound.h)
     sfs_sound_encoder_data**	out_file_encoders;
     bool		silence;
+    // REHORSED MODIFICATION: Signal external recording (outside SunVox file encoders)
+    bool		external_recording_active;
 };
 
 inline int SUNVOX_SOUND_STREAM_CONTROL( sunvox_engine* s, sunvox_stream_command cmd )

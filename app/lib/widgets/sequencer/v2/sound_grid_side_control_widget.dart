@@ -12,10 +12,16 @@ enum SideControlSide { left, right }
 
 class SoundGridSideControlWidget extends StatelessWidget {
   final SideControlSide side;
-  
+  final VoidCallback? onBack;
+  final VoidCallback? onSettings;
+  final VoidCallback? onRecordings;
+
   const SoundGridSideControlWidget({
     super.key,
     this.side = SideControlSide.left,
+    this.onBack,
+    this.onSettings,
+    this.onRecordings,
   });
 
   @override
@@ -38,16 +44,20 @@ class SoundGridSideControlWidget extends StatelessWidget {
 
             // Use 90% of available height for buttons, leaving small margins
             final buttonsAreaHeight = availableHeight * 0.9;
-            // Compute layout per side
-            final int buttonCount = side == SideControlSide.left ? 4 : 3;
-            final buttonSpacing = buttonsAreaHeight * 0.05;
-            final buttonHeight = (buttonsAreaHeight - ((buttonCount - 1) * buttonSpacing)) / buttonCount;
-            
+            // Right side: 3 buttons divided evenly
+            final int buttonCount = 3;
+
             // Button width should use most of available width
             final buttonWidth = availableWidth * 0.8;
-            
-            // Icon size based on button height
-            final iconSize = (buttonHeight * 0.06).clamp(16.0, 32.0);
+
+            // Right side only: divide height evenly
+            final buttonSpacing = buttonsAreaHeight * 0.05;
+            final buttonHeight = (buttonsAreaHeight - ((buttonCount - 1) * buttonSpacing)) / buttonCount;
+
+            // Icon size: for right side based on buttonHeight, for left side based on buttonWidth (square)
+            final iconSize = side == SideControlSide.left
+                ? (buttonWidth * 0.5).clamp(12.0, 24.0)
+                : (buttonHeight * 0.5).clamp(14.0, 28.0);
             
             return Container(
               width: availableWidth,
@@ -70,69 +80,55 @@ class SoundGridSideControlWidget extends StatelessWidget {
               ),
               child: hideButtons
                   ? const SizedBox.shrink()
+                  : side == SideControlSide.left
+                  // ── Left side: Expanded layout — no overflow possible ─────────
+                  ? Column(
+                      children: [
+                        // Nav: menu / settings / takes
+                        Expanded(child: _buildSquareButton(size: buttonWidth, icon: Icons.menu, color: AppColors.sequencerLightText, onPressed: onBack)),
+                        const SizedBox(height: 3),
+                        Expanded(child: _buildSquareButton(size: buttonWidth, icon: Icons.graphic_eq, color: AppColors.sequencerAccent, onPressed: onRecordings)),
+                        const SizedBox(height: 3),
+                        // Sequencer: section / loop / redo / undo
+                        Expanded(child: _SectionControlButton(
+                          size: buttonWidth,
+                          sectionNumber: tableState.uiSelectedSection + 1,
+                          onPressed: () {
+                            if (multitaskPanel.currentMode == MultitaskPanelMode.sectionSettings) {
+                              multitaskPanel.showPlaceholder();
+                            } else {
+                              multitaskPanel.showSectionSettings();
+                            }
+                          },
+                        )),
+                        const SizedBox(height: 3),
+                        Expanded(child: _buildSquareButton(
+                          size: buttonWidth,
+                          icon: Icons.repeat,
+                          color: playbackState.songModeNotifier.value == false ? Colors.white : AppColors.sequencerLightText,
+                          backgroundColor: playbackState.songModeNotifier.value == false ? AppColors.sequencerPrimaryButton : null,
+                          onPressed: () => playbackState.setSongMode(!playbackState.songModeNotifier.value),
+                        )),
+                        const SizedBox(height: 3),
+                        Expanded(child: _buildSquareButton(
+                          size: buttonWidth,
+                          icon: Icons.redo,
+                          color: undoRedo.canRedo ? AppColors.sequencerAccent : AppColors.sequencerLightText,
+                          onPressed: undoRedo.canRedo ? () => undoRedo.redo() : null,
+                        )),
+                        const SizedBox(height: 3),
+                        Expanded(child: _buildSquareButton(
+                          size: buttonWidth,
+                          icon: Icons.undo,
+                          color: undoRedo.canUndo ? AppColors.sequencerAccent : AppColors.sequencerLightText,
+                          onPressed: undoRedo.canUndo ? () => undoRedo.undo() : null,
+                        )),
+                      ],
+                    )
+                  // ── Right side: original fixed-height layout ──────────────────
                   : Column(
                 mainAxisAlignment: MainAxisAlignment.center,
-                children: side == SideControlSide.left ? [
-                  // Left Side: Section Control Button
-                  _SectionControlButton(
-                    width: buttonWidth,
-                    height: buttonHeight,
-                    sectionNumber: tableState.uiSelectedSection + 1,
-                    onPressed: () {
-                      if (multitaskPanel.currentMode == MultitaskPanelMode.sectionSettings) {
-                        multitaskPanel.showPlaceholder();
-                      } else {
-                        multitaskPanel.showSectionSettings();
-                      }
-                    },
-                    tooltip: 'Section Settings',
-                  ),
-                   
-                  SizedBox(height: buttonSpacing),
-                  
-                  // Middle Button - Loop/Song mode toggle
-                  _buildSideControlButton(
-                    width: buttonWidth,
-                    height: buttonHeight,
-                    iconSize: iconSize,
-                    icon: Icons.repeat,
-                    color: playbackState.songModeNotifier.value == false 
-                        ? Colors.white 
-                        : AppColors.sequencerLightText,
-                    onPressed: () {
-                      playbackState.setSongMode(!(playbackState.songModeNotifier.value));
-                    },
-                    tooltip: (playbackState.songModeNotifier.value == false) 
-                        ? 'Loop Mode (Active)'
-                        : 'Song Mode (Click to Loop)',
-                    backgroundColor: (playbackState.songModeNotifier.value == false) 
-                        ? AppColors.sequencerPrimaryButton 
-                        : AppColors.sequencerSurfacePressed,
-                  ),
-                  
-                  SizedBox(height: buttonSpacing),
-                  
-                  // Bottom two buttons: Redo above, Undo at bottom
-                  _buildSideControlButton(
-                    width: buttonWidth,
-                    height: buttonHeight,
-                    iconSize: iconSize,
-                    icon: Icons.redo,
-                    color: undoRedo.canRedo ? AppColors.sequencerAccent : AppColors.sequencerLightText,
-                    onPressed: undoRedo.canRedo ? () => undoRedo.redo() : null,
-                    tooltip: undoRedo.canRedo ? 'Redo' : 'Nothing to Redo',
-                  ),
-                  SizedBox(height: buttonSpacing),
-                  _buildSideControlButton(
-                    width: buttonWidth,
-                    height: buttonHeight,
-                    iconSize: iconSize,
-                    icon: Icons.undo,
-                    color: undoRedo.canUndo ? AppColors.sequencerAccent : AppColors.sequencerLightText,
-                    onPressed: undoRedo.canUndo ? () => undoRedo.undo() : null,
-                    tooltip: undoRedo.canUndo ? 'Undo' : 'Nothing to Undo',
-                  ),
-                ] : [
+                children: [
                   // Right Side: Previous, Next, Redo
                   _buildSideControlButton(
                     width: buttonWidth,
@@ -253,22 +249,51 @@ class SoundGridSideControlWidget extends StatelessWidget {
     );
   }
 
+  // Left-side panel button: fixed width, fills available height via Expanded
+  Widget _buildSquareButton({
+    required double size,
+    required IconData icon,
+    required Color color,
+    required VoidCallback? onPressed,
+    Color? backgroundColor,
+  }) {
+    final isEnabled = onPressed != null;
+    final iconSize = (size * 0.5).clamp(12.0, 22.0);
+    return GestureDetector(
+      onTap: onPressed,
+      child: Container(
+        width: size,
+        height: double.infinity, // fills the Expanded slot height
+        decoration: BoxDecoration(
+          color: backgroundColor ?? (isEnabled
+              ? AppColors.sequencerSurfaceRaised
+              : AppColors.sequencerSurfacePressed),
+          borderRadius: BorderRadius.circular(2),
+          border: Border.all(color: AppColors.sequencerBorder, width: 0.5),
+          boxShadow: isEnabled
+              ? [
+                  BoxShadow(color: AppColors.sequencerShadow, blurRadius: 1.5, offset: const Offset(0, 1)),
+                  BoxShadow(color: AppColors.sequencerSurfaceRaised, blurRadius: 0.5, offset: const Offset(0, -0.5)),
+                ]
+              : [BoxShadow(color: AppColors.sequencerShadow, blurRadius: 1, offset: const Offset(0, 0.5))],
+        ),
+        child: Center(child: Icon(icon, color: color, size: iconSize)),
+      ),
+    );
+  }
+
 }
 
 // Stateful section control button with click feedback
 class _SectionControlButton extends StatefulWidget {
-  final double width;
-  final double height;
+  final double size; // square size
   final int sectionNumber;
   final VoidCallback onPressed;
-  final String tooltip;
 
   const _SectionControlButton({
-    required this.width,
-    required this.height,
+    required this.size,
     required this.sectionNumber,
     required this.onPressed,
-    required this.tooltip,
   });
 
   @override
@@ -294,41 +319,35 @@ class _SectionControlButtonState extends State<_SectionControlButton> {
         setState(() => _isPressed = false);
       },
       child: Container(
-        width: widget.width,
-        height: widget.height,
+        width: widget.size,
+        height: double.infinity, // fills the Expanded slot height
         decoration: BoxDecoration(
-          color: _isPressed 
-              ? AppColors.sequencerPrimaryButton 
+          color: _isPressed
+              ? AppColors.sequencerPrimaryButton
               : AppColors.sequencerSurfaceRaised,
           borderRadius: BorderRadius.circular(2),
-          border: Border.all(
-            color: AppColors.sequencerBorder,
-            width: 0.5,
-          ),
+          border: Border.all(color: AppColors.sequencerBorder, width: 0.5),
           boxShadow: [
-            BoxShadow(
-              color: AppColors.sequencerShadow,
-              blurRadius: 1.5,
-              offset: const Offset(0, 1),
-            ),
-            BoxShadow(
-              color: AppColors.sequencerSurfaceRaised,
-              blurRadius: 0.5,
-              offset: const Offset(0, -0.5),
-            ),
+            BoxShadow(color: AppColors.sequencerShadow, blurRadius: 1.5, offset: const Offset(0, 1)),
+            BoxShadow(color: AppColors.sequencerSurfaceRaised, blurRadius: 0.5, offset: const Offset(0, -0.5)),
           ],
         ),
-        child: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
+        // FittedBox prevents any text overflow by scaling content to fit the square
+        child: FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Padding(
+            padding: const EdgeInsets.all(2),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
               Text(
                 '${widget.sectionNumber}',
                 style: TextStyle(
-                  color: _isPressed 
-                      ? Colors.white 
+                  color: _isPressed
+                      ? Colors.white
                       : AppColors.sequencerLightText,
-                  fontSize: widget.width * 0.55,
+                  fontSize: widget.size * 0.55,
                   fontWeight: FontWeight.w700,
                   height: 0.9,
                 ),
@@ -339,23 +358,15 @@ class _SectionControlButtonState extends State<_SectionControlButton> {
                   if (!isSongMode) {
                     // Loop mode: show infinity symbol
                     final color = Color.lerp(AppColors.menuErrorColor, AppColors.sequencerLightText, 0.5)!;
-                    return Padding(
-                      padding: EdgeInsets.only(top: widget.height * 0.08),
-                      child: SizedBox(
-                        height: widget.width * 0.7,
-                        child: Text(
+                    return Text(
                           '∞',
-                          overflow: TextOverflow.fade,
-                          softWrap: false,
                           style: TextStyle(
                             color: color,
-                            fontSize: widget.width * 0.7,
+                            fontSize: widget.size * 0.55,
                             fontWeight: FontWeight.w600,
                             height: 1.0,
                           ),
-                        ),
-                      ),
-                    );
+                        );
                   } else {
                     // Song mode: show loop counter
                     return ValueListenableBuilder<int>(
@@ -367,23 +378,15 @@ class _SectionControlButtonState extends State<_SectionControlButton> {
                             final displayCurrent = (currentLoopZeroBased + 1).clamp(1, totalLoops);
                             final label = '$displayCurrent/$totalLoops';
                             final color = Color.lerp(AppColors.menuErrorColor, AppColors.sequencerLightText, 0.5)!;
-                            return Padding(
-                              padding: EdgeInsets.only(top: widget.height * 0.08),
-                              child: SizedBox(
-                                height: widget.width * 0.7,
-                                child: Text(
+                            return Text(
                                   label,
-                                  overflow: TextOverflow.fade,
-                                  softWrap: false,
                                   style: TextStyle(
                                     color: color,
-                                    fontSize: widget.width * 0.40,
+                                    fontSize: widget.size * 0.35,
                                     fontWeight: FontWeight.w600,
                                     height: 1.0,
                                     letterSpacing: 0.2,
                                   ),
-                                ),
-                              ),
                             );
                           },
                         );
@@ -393,9 +396,10 @@ class _SectionControlButtonState extends State<_SectionControlButton> {
                 },
               ),
             ],
-          ),
-        ),
-      ),
-    );
+          ),   // Column
+        ),     // Padding
+      ),       // FittedBox
+    ),         // Container
+  );           // GestureDetector
   }
 } 

@@ -1,43 +1,43 @@
 #ifndef RECORDING_H
 #define RECORDING_H
 
+#include <stdint.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-// Start recording SunVox output to WAV file
-// Returns: 0 on success, negative error code on failure
-//   -1: Playback not initialized
-//   -2: Already recording
-//   -3: Failed to initialize encoder
+// Original recording functions (output recording logic)
+// Sample bank functions (forward declarations)
 __attribute__((visibility("default"))) __attribute__((used))
 int recording_start(const char* file_path);
 
-// Stop recording and close WAV file
 __attribute__((visibility("default"))) __attribute__((used))
 void recording_stop(void);
 
-// Check if recording is currently active
-// Returns: 1 if recording, 0 if not
 __attribute__((visibility("default"))) __attribute__((used))
 int recording_is_active(void);
 
-// Write frames from audio callback (called from playback_sunvox.mm audio callback)
-// This is thread-safe and will only write if recording is active
-// buffer: float32 interleaved stereo audio (LRLRLR...)
-// frame_count: number of frames (not samples!)
+// Write audio frames from callback (called from playback_sunvox.mm audio callback)
 __attribute__((visibility("default"))) __attribute__((used))
-void recording_write_frames_from_callback(const float* buffer, int frame_count);
+void recording_write_frames_from_callback(const float* frames, int frame_count);
 
-// Write frames to recording (called from audio callback)
-// This is called by audio_output.mm when recording is active
-// NOTE: Must be thread-safe!
+// NEW: Waveform visualization function (added for Layer 5 visualization)
+// Read WAV samples for visualization (downsampled if needed)
+// Parameters:
+//   wav_path: Path to WAV file
+//   buffer: Output buffer for int16 samples
+//   max_samples: Maximum number of samples to read
+//   downsample_factor: Read every Nth sample (1 = no downsampling, 10 = every 10th sample)
+// Returns: Number of samples read, or negative error code
 __attribute__((visibility("default"))) __attribute__((used))
-void recording_write_frames(const float* buffer, int frame_count);
+int recording_get_waveform_samples(const char* wav_path, 
+                                   int16_t* buffer, 
+                                   int max_samples,
+                                   int downsample_factor);
 
 #ifdef __cplusplus
 }
 #endif
 
 #endif // RECORDING_H
-

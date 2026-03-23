@@ -36,8 +36,7 @@ class _BottomAudioPlayerState extends State<BottomAudioPlayer> {
   Widget build(BuildContext context) {
     return Consumer<AudioPlayerState>(
       builder: (context, audioPlayer, _) {
-        if (audioPlayer.currentlyPlayingMessageId == null && 
-            audioPlayer.currentlyPlayingRenderId == null) {
+        if (audioPlayer.currentlyPlayingItemId == null) {
           return const SizedBox.shrink();
         }
 

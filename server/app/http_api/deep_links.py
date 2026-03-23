@@ -24,7 +24,7 @@ def assetlinks_json():
         "relation": ["delegate_permission/common.handle_all_urls"],
         "target": {
             "namespace": "android_app",
-            "package_name": "com.example.fortuned",
+            "package_name": "com.example.rehorsed",
             "sha256_cert_fingerprints": [fingerprint]
         }
     }]

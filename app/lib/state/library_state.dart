@@ -1,12 +1,14 @@
-import 'dart:convert';
 import 'package:flutter/foundation.dart';
-import '../models/playlist_item.dart';
-import '../models/thread/message.dart';
-import '../services/http_client.dart';
+import 'package:uuid/uuid.dart';
+import '../models/library_item.dart';
+import '../services/local_library_service.dart';
+import '../utils/local_audio_path.dart';
 
+/// Local-only state for managing library
+/// Simplified to work without server synchronization
 class LibraryState extends ChangeNotifier {
   // Data
-  List<PlaylistItem> _playlist = [];
+  List<LibraryItem> _library = [];
   
   // UI state
   bool _isLoading = false;
@@ -15,135 +17,24 @@ class LibraryState extends ChangeNotifier {
   // Track if initial load is complete
   bool _hasLoaded = false;
   
+  final _uuid = const Uuid();
+  
   // Getters
-  List<PlaylistItem> get playlist => List.unmodifiable(_playlist);
+  List<LibraryItem> get library => List.unmodifiable(_library);
   bool get isLoading => _isLoading;
   String? get error => _error;
   bool get hasLoaded => _hasLoaded;
   
   // ============================================================================
-  // Private API methods
-  // ============================================================================
-  
-  /// Fetch playlist from server
-  Future<List<PlaylistItem>> _fetchPlaylistFromServer(String userId) async {
-    try {
-      final response = await ApiHttpClient.get(
-        '/users/playlist',
-        queryParams: {
-          'user_id': userId,
-        },
-      );
-      
-      if (response.statusCode == 200) {
-        final json = jsonDecode(response.body) as Map<String, dynamic>;
-        final playlistData = json['playlist'] as List<dynamic>? ?? [];
-        final playlist = playlistData
-            .map((item) => PlaylistItem.fromJson(item as Map<String, dynamic>))
-            .toList();
-        
-        debugPrint('✅ [LIBRARY] Fetched playlist from server: ${playlist.length} items');
-        return playlist;
-      } else {
-        debugPrint('❌ [LIBRARY] Failed to fetch playlist: ${response.statusCode}');
-        return [];
-      }
-    } catch (e) {
-      debugPrint('❌ [LIBRARY] Error fetching playlist: $e');
-      rethrow;
-    }
-  }
-  
-  /// Add item to server
-  Future<bool> _addToPlaylistOnServer({
-required String userId,
-    required Render render,
-    String? customName,
-  }) async {
-    try {
-      // Use custom name if provided, otherwise format as "Oct 5, 2025"
-      final String name;
-      if (customName != null && customName.isNotEmpty) {
-        name = customName;
-      } else {
-        final now = DateTime.now();
-        const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 
-                        'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-        name = '${months[now.month - 1]} ${now.day}, ${now.year}';
-      }
-      
-      // Convert render to playlist item format
-      final playlistItem = {
-        'name': name,
-        'url': render.url,
-        'id': render.id,
-        'format': render.format,
-        if (render.bitrate != null) 'bitrate': render.bitrate,
-        if (render.duration != null) 'duration': render.duration,
-        if (render.sizeBytes != null) 'size_bytes': render.sizeBytes,
-        'created_at': render.createdAt.toIso8601String(),
-        'type': 'render',
-      };
-      
-      final response = await ApiHttpClient.post(
-        '/users/playlist/add',
-        body: {
-          'user_id': userId,
-          'render': playlistItem,
-        },
-      );
-      
-      if (response.statusCode == 200) {
-        debugPrint('✅ [LIBRARY] Added to server playlist: ${render.id}');
-        return true;
-      } else {
-        debugPrint('❌ [LIBRARY] Failed to add on server: ${response.statusCode}');
-        return false;
-      }
-    } catch (e) {
-      debugPrint('❌ [LIBRARY] Error adding to server playlist: $e');
-      return false;
-    }
-  }
-  
-  /// Remove item from server
-  Future<bool> _removeFromPlaylistOnServer({
-    required String userId,
-    required String renderId,
-  }) async {
-    try {
-      final response = await ApiHttpClient.post(
-        '/users/playlist/remove',
-        body: {
-          'user_id': userId,
-          'render_id': renderId,
-        },
-      );
-      
-      if (response.statusCode == 200) {
-        debugPrint('✅ [LIBRARY] Removed from server playlist: $renderId');
-        return true;
-      } else {
-        debugPrint('❌ [LIBRARY] Failed to remove on server: ${response.statusCode}');
-        return false;
-      }
-    } catch (e) {
-      debugPrint('❌ [LIBRARY] Error removing from server playlist: $e');
-      return false;
-    }
-  }
-  
-  // ============================================================================
   // Public API methods
   // ============================================================================
   
-  /// Load playlist once on app startup
-  Future<void> loadPlaylist({required String userId}) async {
-    // If already loaded or has items (from optimistic updates), don't reload
-    if (_hasLoaded || _playlist.isNotEmpty) {
-      debugPrint('📚 [LIBRARY] Playlist already loaded or has items (${_playlist.length} items)');
+  /// Load library once on app startup
+  Future<void> loadLibrary() async {
+    // If already loaded or has items, don't reload
+    if (_hasLoaded || _library.isNotEmpty) {
+      debugPrint('📚 [LIBRARY] Library already loaded (${_library.length} items)');
       if (!_hasLoaded) {
-        // Mark as loaded if we have items from optimistic updates
         _hasLoaded = true;
       }
       return;
@@ -155,26 +46,30 @@ required String userId,
       
       _error = null;
       
-      final playlist = await _fetchPlaylistFromServer(userId);
-      
-      _playlist = playlist;
+      var items = await LocalLibraryService.loadLibrary();
+      items = await _repairLibraryPaths(items);
+      _library = items;
       _hasLoaded = true;
       
-      debugPrint('📚 [LIBRARY] Loaded playlist: ${_playlist.length} items');
+      debugPrint('📚 [LIBRARY] Loaded library: ${_library.length} items');
     } catch (e) {
-      _error = 'Failed to load playlist: $e';
-      debugPrint('❌ [LIBRARY] Error loading playlist: $e');
+      _error = 'Failed to load library: $e';
+      debugPrint('❌ [LIBRARY] Error loading library: $e');
     } finally {
       _isLoading = false;
       notifyListeners();
     }
   }
   
-  /// Add item to playlist (optimistic update with background sync)
-  Future<bool> addToPlaylist({
-    required String userId,
-    required Render render,
+  /// Add item to library from local file path
+  Future<bool> addToLibrary({
+    required String localPath,
+    required String format,
     String? customName,
+    double? duration,
+    int? sizeBytes,
+    String? sourcePatternId,
+    String? sourceCheckpointId,
   }) async {
     // Use custom name if provided, otherwise format as "Oct 5, 2025"
     final String name;
@@ -187,195 +82,138 @@ required String userId,
       name = '${months[now.month - 1]} ${now.day}, ${now.year}';
     }
     
-    // Determine if render is still uploading
-    final isUploading = render.uploadStatus == RenderUploadStatus.uploading || 
-                       render.url.isEmpty;
-    
-    // Create playlist item with localPath for instant playback
-    final item = PlaylistItem(
+    // Create library item
+    final item = LibraryItem(
+      id: _uuid.v4(),
       name: name,
-      url: render.url,
-      id: render.id,
-      format: render.format,
-      bitrate: render.bitrate,
-      duration: render.duration,
-      sizeBytes: render.sizeBytes,
-      createdAt: render.createdAt,
-      type: 'render',
-      localPath: render.localPath, // For instant playback!
-      uploadStatus: isUploading ? render.uploadStatus : null,
-    );
-    
-    // Optimistically add to local list
-    _playlist = [item, ..._playlist];
-    notifyListeners();
-    
-    debugPrint('📚 [LIBRARY] Added to local playlist: ${render.id} (${isUploading ? "uploading" : "ready"})');
-    
-    // Only sync to server if URL is available (not uploading)
-    if (!isUploading && render.url.isNotEmpty) {
-      try {
-        final success = await _addToPlaylistOnServer(
-          userId: userId,
-          render: render,
-          customName: customName,
-        );
-        
-        if (!success) {
-          // Rollback on failure
-          _playlist = _playlist.where((i) => i.id != item.id).toList();
-          notifyListeners();
-          return false;
-        }
-        
-        return true;
-      } catch (e) {
-        // Rollback on error
-        _playlist = _playlist.where((i) => i.id != item.id).toList();
-        notifyListeners();
-        debugPrint('❌ [LIBRARY] Failed to add to playlist: $e');
-        return false;
-      }
-    } else {
-      // Item added locally, will sync when upload completes
-      debugPrint('📚 [LIBRARY] Item queued for server sync when upload completes');
-      return true;
-    }
-  }
-  
-  /// Update playlist item when render upload completes
-  Future<void> updateItemAfterUpload({
-    required String userId,
-    required String renderId,
-    required String url,
-  }) async {
-    // Find the item
-    final index = _playlist.indexWhere((i) => i.id == renderId);
-    if (index == -1) {
-      debugPrint('📚 [LIBRARY] Item not found for update: $renderId');
-      return;
-    }
-    
-    final oldItem = _playlist[index];
-    
-    // Update with URL and remove upload status
-    final updatedItem = oldItem.copyWith(
-      url: url,
-      uploadStatus: RenderUploadStatus.completed,
-      // Keep localPath for now (will be cleaned up by cache service)
-    );
-    
-    _playlist = List.from(_playlist)..[index] = updatedItem;
-    notifyListeners();
-    
-    debugPrint('📚 [LIBRARY] Updated item with URL: $renderId');
-    
-    // Now sync to server with the URL
-    final render = Render(
-      id: updatedItem.id,
-      url: updatedItem.url,
-      format: updatedItem.format,
-      bitrate: updatedItem.bitrate,
-      duration: updatedItem.duration,
-      sizeBytes: updatedItem.sizeBytes,
-      createdAt: updatedItem.createdAt,
+      localPath: localPath,
+      format: format,
+      duration: duration,
+      sizeBytes: sizeBytes,
+      sourcePatternId: sourcePatternId,
+      sourceCheckpointId: sourceCheckpointId,
+      createdAt: DateTime.now(),
     );
     
     try {
-      final success = await _addToPlaylistOnServer(
-        userId: userId,
-        render: render,
-      );
+      // Optimistically add to local list
+      _library = [item, ..._library];
+      notifyListeners();
+      
+      debugPrint('📚 [LIBRARY] Added to local library: ${item.id}');
+      
+      // Save to storage
+      final success = await LocalLibraryService.addItem(item);
       
       if (!success) {
-        debugPrint('⚠️ [LIBRARY] Failed to sync to server, but keeping in local library');
+        // Rollback on failure
+        _library = _library.where((i) => i.id != item.id).toList();
+        notifyListeners();
+        return false;
       }
+      
+      return true;
     } catch (e) {
-      debugPrint('⚠️ [LIBRARY] Error syncing to server: $e');
+      // Rollback on error
+      _library = _library.where((i) => i.id != item.id).toList();
+      notifyListeners();
+      debugPrint('❌ [LIBRARY] Failed to add to library: $e');
+      return false;
     }
   }
   
-  /// Remove item from playlist (optimistic update with background sync)
-  Future<bool> removeFromPlaylist({
-    required String userId,
-    required String renderId,
-  }) async {
+  /// Remove item from library
+  Future<bool> removeFromLibrary(String itemId) async {
     // Find and save the item in case we need to rollback
-    final removedIndex = _playlist.indexWhere((i) => i.id == renderId);
+    final removedIndex = _library.indexWhere((i) => i.id == itemId);
     if (removedIndex == -1) {
-      debugPrint('❌ [LIBRARY] Item not found: $renderId');
+      debugPrint('❌ [LIBRARY] Item not found: $itemId');
       return false;
     }
     
-    final removedItem = _playlist[removedIndex];
+    final removedItem = _library[removedIndex];
     
-    // Optimistically remove from local list
-    _playlist = List.from(_playlist)..removeAt(removedIndex);
-    notifyListeners();
-    
-    // Sync to server in background
     try {
-      final success = await _removeFromPlaylistOnServer(
-        userId: userId,
-        renderId: renderId,
-      );
+      // Optimistically remove from local list
+      _library = List.from(_library)..removeAt(removedIndex);
+      notifyListeners();
+      
+      // Remove from storage
+      final success = await LocalLibraryService.removeItem(itemId);
       
       if (!success) {
         // Rollback on failure - restore at original position
-        _playlist = List.from(_playlist)..insert(removedIndex, removedItem);
+        _library = List.from(_library)..insert(removedIndex, removedItem);
         notifyListeners();
         return false;
       }
       
+      debugPrint('📚 [LIBRARY] Removed from library: $itemId');
       return true;
     } catch (e) {
       // Rollback on error - restore at original position
-      _playlist = List.from(_playlist)..insert(removedIndex, removedItem);
+      _library = List.from(_library)..insert(removedIndex, removedItem);
       notifyListeners();
-      debugPrint('❌ [LIBRARY] Failed to remove from playlist: $e');
+      debugPrint('❌ [LIBRARY] Failed to remove from library: $e');
       return false;
     }
   }
   
-  /// Clear all data (e.g., on logout)
+  /// Update library item name
+  Future<bool> updateItemName(String itemId, String newName) async {
+    try {
+      final index = _library.indexWhere((i) => i.id == itemId);
+      if (index == -1) {
+        debugPrint('❌ [LIBRARY] Item not found: $itemId');
+        return false;
+      }
+      
+      final oldItem = _library[index];
+      final updatedItem = oldItem.copyWith(name: newName);
+      
+      // Update in memory
+      _library = List.from(_library)..[index] = updatedItem;
+      notifyListeners();
+      
+      // Note: We don't have an updateItem method in LocalLibraryService
+      // We need to remove and re-add to update
+      // For now, just update in memory
+      // TODO: Add updateItem method to LocalLibraryService if needed
+      
+      debugPrint('📚 [LIBRARY] Updated item name: $itemId');
+      return true;
+    } catch (e) {
+      debugPrint('❌ [LIBRARY] Error updating item name: $e');
+      return false;
+    }
+  }
+  
+  /// Fix stale absolute paths (iOS container changes, file://, /var vs /private/var).
+  Future<List<LibraryItem>> _repairLibraryPaths(List<LibraryItem> items) async {
+    final resolved = await Future.wait(
+      items.map((item) => LocalAudioPath.resolve(item.localPath)),
+    );
+    var changed = false;
+    final out = <LibraryItem>[];
+    for (var i = 0; i < items.length; i++) {
+      final newPath = resolved[i] ?? items[i].localPath;
+      if (resolved[i] != null && resolved[i] != items[i].localPath) changed = true;
+      out.add(items[i].copyWith(localPath: newPath));
+    }
+    if (changed) {
+      await LocalLibraryService.writeItems(out);
+      debugPrint('📚 [LIBRARY] Repaired stale paths in library.json');
+    }
+    return out;
+  }
+
+  /// Clear all data
   void clear() {
-    _playlist = [];
+    _library = [];
     _hasLoaded = false;
     _error = null;
     _isLoading = false;
     notifyListeners();
-    debugPrint('📚 [LIBRARY] Cleared playlist data');
-  }
-  
-  /// Refresh playlist in background (silent refresh after reconnection)
-  Future<void> refreshPlaylistInBackground({required String userId}) async {
-    try {
-      debugPrint('🔄 [LIBRARY] Refreshing playlist in background...');
-      
-      final freshPlaylist = await _fetchPlaylistFromServer(userId);
-      
-      // Compare and update if changed
-      if (_playlist.length != freshPlaylist.length ||
-          !_playlistsAreEqual(_playlist, freshPlaylist)) {
-        _playlist = freshPlaylist;
-        notifyListeners();
-        debugPrint('✅ [LIBRARY] Playlist updated after background refresh');
-      } else {
-        debugPrint('✅ [LIBRARY] Playlist unchanged after background refresh');
-      }
-    } catch (e) {
-      debugPrint('❌ [LIBRARY] Background refresh failed: $e');
-      // Silently fail - don't update error state
-    }
-  }
-  
-  /// Compare two playlists for equality
-  bool _playlistsAreEqual(List<PlaylistItem> a, List<PlaylistItem> b) {
-    if (a.length != b.length) return false;
-    for (int i = 0; i < a.length; i++) {
-      if (a[i].id != b[i].id) return false;
-    }
-    return true;
+    debugPrint('📚 [LIBRARY] Cleared library data');
   }
 }
-

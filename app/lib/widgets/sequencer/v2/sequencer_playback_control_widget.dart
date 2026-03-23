@@ -68,8 +68,8 @@ class SequencerPlaybackControlWidget extends StatelessWidget {
                           // Master settings button (replaces the leftmost button)
                           _buildMasterButton(context),
                           
-                          // Record button
-                          _buildRecordButton(recordingState),
+                          // Record button (pass tableState for layer context)
+                          _buildRecordButton(recordingState, tableState),
                           
                           // Play button
                           _buildPlayButton(playbackState),
@@ -146,7 +146,7 @@ class SequencerPlaybackControlWidget extends StatelessWidget {
     );
   }
 
-  Widget _buildRecordButton(RecordingState recordingState) {
+  Widget _buildRecordButton(RecordingState recordingState, TableState tableState) {
     return ValueListenableBuilder<bool>(
       valueListenable: recordingState.isRecordingNotifier,
       builder: (context, isRecording, child) {
@@ -208,7 +208,23 @@ class SequencerPlaybackControlWidget extends StatelessWidget {
               Icons.fiber_manual_record,
               color: AppColors.sequencerAccent,
             ),
-            onPressed: () => recordingState.startRecording(),
+            onPressed: () async {
+              if (!context.read<PlaybackState>().isPlaying) {
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Start playback before pattern recording.'),
+                      duration: Duration(seconds: 2),
+                    ),
+                  );
+                }
+                return;
+              }
+
+              // Pass current layer to recording state
+              final layer = tableState.uiSelectedLayer;
+              await recordingState.requestRecording(layer: layer);
+            },
             iconSize: 20,
             padding: const EdgeInsets.all(2),
             constraints: const BoxConstraints(minWidth: 28, minHeight: 28),

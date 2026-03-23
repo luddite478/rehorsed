@@ -68,7 +68,13 @@ class EditButtonsWidget extends StatelessWidget {
                         height: buttonHeight,
                         fontSize: textFontSize,
                         enabled: true,
-                        onPressed: () => editState.toggleSelectionMode(),
+                        onPressed: () {
+                          editState.toggleSelectionMode();
+                          // If SELECT was just turned on and a cell is selected, show cell settings
+                          if (editState.isInSelectionMode && editState.hasSelection) {
+                            Provider.of<MultitaskPanelState>(context, listen: false).showCellSettings();
+                          }
+                        },
                         isActive: editState.isInSelectionMode,
                         horizontalPadding: buttonHPad,
                       ),
