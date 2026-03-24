@@ -453,13 +453,19 @@ class EditButtonsWidget extends StatelessWidget {
           child: Padding(
             padding: EdgeInsets.symmetric(horizontal: horizontalPadding),
             child: Center(
-              child: Text(
-                label,
-                style: GoogleFonts.sourceSans3(
-                  fontSize: fontSize,
-                  fontWeight: FontWeight.w700,
-                  color: textColor,
-                  letterSpacing: 0.8,
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  softWrap: false,
+                  overflow: TextOverflow.visible,
+                  style: GoogleFonts.sourceSans3(
+                    fontSize: fontSize,
+                    fontWeight: FontWeight.w700,
+                    color: textColor,
+                    letterSpacing: 0.8,
+                  ),
                 ),
               ),
             ),
@@ -533,15 +539,21 @@ class _JumpButtonWithFeedbackState extends State<_JumpButtonWithFeedback> {
         child: Padding(
           padding: EdgeInsets.symmetric(horizontal: widget.horizontalPadding),
           child: Center(
-            child: Text(
-              widget.label,
-              style: GoogleFonts.sourceSans3(
-                fontSize: widget.fontSize,
-                fontWeight: FontWeight.w700,
-                color: _isPressed 
-                    ? AppColors.sequencerPageBackground 
-                    : AppColors.sequencerText,
-                letterSpacing: 0.8,
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text(
+                widget.label,
+                maxLines: 1,
+                softWrap: false,
+                overflow: TextOverflow.visible,
+                style: GoogleFonts.sourceSans3(
+                  fontSize: widget.fontSize,
+                  fontWeight: FontWeight.w700,
+                  color: _isPressed 
+                      ? AppColors.sequencerPageBackground 
+                      : AppColors.sequencerText,
+                  letterSpacing: 0.8,
+                ),
               ),
             ),
           ),

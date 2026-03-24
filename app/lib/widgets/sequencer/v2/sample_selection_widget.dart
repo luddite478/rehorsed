@@ -339,7 +339,6 @@ class _FileListTile extends StatelessWidget {
               // SELECT button
               _ActionButton(
                 label: 'SELECT',
-                icon: Icons.check,
                 filled: true,
                 onTap: () async {
                   await _selectSampleForCurrentTarget(
@@ -363,13 +362,11 @@ class _FileListTile extends StatelessWidget {
 class _ActionButton extends StatelessWidget {
   const _ActionButton({
     required this.label,
-    required this.icon,
     required this.filled,
     required this.onTap,
   });
 
   final String label;
-  final IconData icon;
   final bool filled;
   final VoidCallback onTap;
 
@@ -390,12 +387,6 @@ class _ActionButton extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(
-              icon,
-              size: 14,
-              color: filled ? AppColors.sequencerPageBackground : AppColors.sequencerAccent,
-            ),
-            const SizedBox(width: 4),
             Text(
               label,
               style: GoogleFonts.sourceSans3(

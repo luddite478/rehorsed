@@ -56,5 +56,5 @@ dev_dependencies:
 flutter_launcher_icons:
   android: true
   ios: true
-  image_path: "icons/rehorsed.png"
+  image_path: "icons/wagon.jpg"
   remove_alpha_ios: true

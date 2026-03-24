@@ -10,6 +10,7 @@ import '../state/library_state.dart';
 import '../models/checkpoint.dart';
 import '../utils/app_colors.dart';
 import '../utils/local_audio_path.dart';
+import '../utils/share_utils.dart';
 
 /// Overlay showing all takes (recordings) for the current pattern
 class PatternRecordingsOverlay extends StatefulWidget {
@@ -497,7 +498,7 @@ class _PatternRecordingsOverlayState extends State<PatternRecordingsOverlay> {
                   ),
                   onSelected: (value) {
                     if (value == 'share' && checkpoint.audioFilePath != null) {
-                      _handleShare(checkpoint.audioFilePath!);
+                      _handleShare(checkpoint.audioFilePath!, context);
                     } else if (value == 'delete') {
                       _handleDelete(checkpoint);
                     }
@@ -770,13 +771,14 @@ class _PatternRecordingsOverlayState extends State<PatternRecordingsOverlay> {
     return '$month-$day-$year $hour:$minute';
   }
 
-  Future<void> _handleShare(String filePath) async {
+  Future<void> _handleShare(String filePath, BuildContext shareContext) async {
     try {
       final resolved = await LocalAudioPath.resolve(filePath);
       if (resolved != null) {
         await Share.shareXFiles(
           [XFile(resolved)],
           text: 'Check out my take!',
+          sharePositionOrigin: getSharePositionOrigin(shareContext),
         );
       } else {
         if (mounted) {

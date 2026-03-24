@@ -430,13 +430,19 @@ class EditButtonsWidget extends StatelessWidget {
           child: Padding(
             padding: EdgeInsets.symmetric(horizontal: horizontalPadding),
             child: Center(
-              child: Text(
-                label,
-                style: GoogleFonts.sourceSans3(
-                  fontSize: fontSize,
-                  fontWeight: FontWeight.w700,
-                  color: textColor,
-                  letterSpacing: 0.8,
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  softWrap: false,
+                  overflow: TextOverflow.visible,
+                  style: GoogleFonts.sourceSans3(
+                    fontSize: fontSize,
+                    fontWeight: FontWeight.w700,
+                    color: textColor,
+                    letterSpacing: 0.8,
+                  ),
                 ),
               ),
             ),

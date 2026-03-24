@@ -44,6 +44,13 @@ class SequencerScreenV2 extends StatefulWidget {
 
 class _SequencerScreenV2State extends State<SequencerScreenV2> with TickerProviderStateMixin, WidgetsBindingObserver {
   static const double _floatingPlaybackBarHeight = 66.0;
+  // Layout flexes:
+  // - Edit buttons and multitask panel are each reduced by 10%
+  // - Freed space is reassigned to the sequencer body above
+  static const int _sequencerBodyFlex = 523; // 500 + (8*0.1 + 15*0.1)*10
+  static const int _editButtonsFlex = 72; // 8 * 0.9 * 10
+  static const int _multitaskPanelFlex = 135; // 15 * 0.9 * 10
+  static const int _contentFlexTotal = _sequencerBodyFlex + _editButtonsFlex + _multitaskPanelFlex;
 
   // Sequencer state instances
   late final TableState _tableState;
@@ -511,7 +518,7 @@ class _SequencerScreenV2State extends State<SequencerScreenV2> with TickerProvid
               child: Column(
                 children: [
                   Expanded(
-                flex: 50,
+                flex: _sequencerBodyFlex,
                     child: SequencerBody(
                       onBack: () async {
                         if (_playbackState.isPlaying) _playbackState.stop();
@@ -525,13 +532,13 @@ class _SequencerScreenV2State extends State<SequencerScreenV2> with TickerProvid
                     ),
                   ),
                   Expanded(
-                    flex: 8,
+                    flex: _editButtonsFlex,
                     child: RepaintBoundary(
                       child: const v2.EditButtonsWidget(),
                     ),
                   ),
                   Expanded(
-                flex: 15,
+                flex: _multitaskPanelFlex,
                     child: RepaintBoundary(
                       child: const v2.MultitaskPanelWidget(),
                     ),
@@ -546,9 +553,8 @@ class _SequencerScreenV2State extends State<SequencerScreenV2> with TickerProvid
                 builder: (context, constraints) {
                   final h = constraints.maxHeight;
                   const double playbackControl = _floatingPlaybackBarHeight;
-                  const int flexTotal = 50 + 8 + 15;
                   final double flexRegion = h - playbackControl;
-                  final double bottomInset = (flexRegion * (15.0 / flexTotal)) + playbackControl;
+                  final double bottomInset = (flexRegion * (_multitaskPanelFlex / _contentFlexTotal)) + playbackControl;
                   return Padding(
                     padding: EdgeInsets.only(top: 0, bottom: bottomInset),
                     child: const ValueControlOverlay(),

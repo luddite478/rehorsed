@@ -40,13 +40,30 @@
 ## Paths
 ##
 
-ifneq (,$(findstring android16,$(TARGET_OS)))
-    #Old NDK r23c with Android 4.1 (API level 16) support:
-    ANDROID_NDK = /home/alex/soft/android-ndk-r23c
-else
-    #Newest NDK:
-    ANDROID_NDK = /home/alex/soft/android-ndk-r27b
+HOST_OS := $(shell uname -s)
+
+# Prefer explicit environment variables. Fallback to common SDK layouts.
+ANDROID_NDK ?= $(ANDROID_NDK_HOME)
+ANDROID_NDK ?= $(ANDROID_NDK_ROOT)
+ifeq ($(ANDROID_NDK),)
+    ifeq ($(HOST_OS),Darwin)
+        ANDROID_NDK := $(lastword $(sort $(wildcard $(HOME)/Library/Android/sdk/ndk/*)))
+    else
+        ifneq (,$(findstring android16,$(TARGET_OS)))
+            # Legacy fallback kept for old Linux setup compatibility.
+            ANDROID_NDK := /home/alex/soft/android-ndk-r23c
+        else
+            ANDROID_NDK := /home/alex/soft/android-ndk-r27b
+        endif
+    endif
 endif
+
+# Pick the first available LLVM prebuilt toolchain directory.
+ANDROID_NDK_PREBUILT := $(firstword \
+    $(wildcard $(ANDROID_NDK)/toolchains/llvm/prebuilt/darwin-arm64) \
+    $(wildcard $(ANDROID_NDK)/toolchains/llvm/prebuilt/darwin-x86_64) \
+    $(wildcard $(ANDROID_NDK)/toolchains/llvm/prebuilt/linux-x86_64) \
+    $(wildcard $(ANDROID_NDK)/toolchains/llvm/prebuilt/windows-x86_64))
 ANDROID_GDK = /home/alex/soft/agdk-libraries
 MACOS_TOOLCHAIN_BIN = /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin
 MACOS_SDK = /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.1.sdk
@@ -108,6 +125,9 @@ endif
 ## Linux: Android
 ##
 ifneq (,$(findstring android,$(TARGET_OS)))
+ifeq ($(ANDROID_NDK_PREBUILT),)
+    $(error Android NDK toolchain not found. Set ANDROID_NDK_HOME/ANDROID_NDK_ROOT to a valid NDK path)
+endif
     SYSROOT = $(ANDROID_NDK)/sysroot
     CFLAGS2 += \
 	-I$(SYSROOT)/usr/include \
@@ -121,13 +141,13 @@ ifeq ($(SUNDOG_VER),2)
     CFLAGS2 += -I$(ANDROID_GDK)/include
     DEFAULT_LIBS += -lc++_static -lc++abi
 endif
-    OBJDUMP = $(ANDROID_NDK)/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-objdump
-    AR = $(ANDROID_NDK)/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
+    OBJDUMP = $(ANDROID_NDK_PREBUILT)/bin/llvm-objdump
+    AR = $(ANDROID_NDK_PREBUILT)/bin/llvm-ar
 ifeq ($(TARGET_ARCH),x86) 
     ifneq (,$(findstring android16,$(TARGET_OS)))
-	CC = $(ANDROID_NDK)/toolchains/llvm/prebuilt/linux-x86_64/bin/i686-linux-android16-clang
+	CC = $(ANDROID_NDK_PREBUILT)/bin/i686-linux-android16-clang
     else
-	CC = $(ANDROID_NDK)/toolchains/llvm/prebuilt/linux-x86_64/bin/i686-linux-android24-clang
+	CC = $(ANDROID_NDK_PREBUILT)/bin/i686-linux-android24-clang
     endif
     CXX = $(CC)++
     LD = $(CC)
@@ -135,9 +155,9 @@ ifeq ($(TARGET_ARCH),x86)
 endif
 ifeq ($(TARGET_ARCH),x86_64)
     ifneq (,$(findstring android16,$(TARGET_OS)))
-	CC = $(ANDROID_NDK)/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android21-clang
+	CC = $(ANDROID_NDK_PREBUILT)/bin/x86_64-linux-android21-clang
     else
-	CC = $(ANDROID_NDK)/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android24-clang
+	CC = $(ANDROID_NDK_PREBUILT)/bin/x86_64-linux-android24-clang
     endif
     CXX = $(CC)++
     LD = $(CC)
@@ -145,9 +165,9 @@ ifeq ($(TARGET_ARCH),x86_64)
 endif
 ifeq ($(TARGET_ARCH),arm)
     ifneq (,$(findstring android16,$(TARGET_OS)))
-	CC = $(ANDROID_NDK)/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi16-clang
+	CC = $(ANDROID_NDK_PREBUILT)/bin/armv7a-linux-androideabi16-clang
     else
-	CC = $(ANDROID_NDK)/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi24-clang
+	CC = $(ANDROID_NDK_PREBUILT)/bin/armv7a-linux-androideabi24-clang
     endif
     CXX = $(CC)++
     LD = $(CC)
@@ -155,9 +175,9 @@ ifeq ($(TARGET_ARCH),arm)
 endif
 ifeq ($(TARGET_ARCH),arm64)
     ifneq (,$(findstring android16,$(TARGET_OS)))
-	CC = $(ANDROID_NDK)/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang
+	CC = $(ANDROID_NDK_PREBUILT)/bin/aarch64-linux-android21-clang
     else
-	CC = $(ANDROID_NDK)/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
+	CC = $(ANDROID_NDK_PREBUILT)/bin/aarch64-linux-android24-clang
     endif
     CXX = $(CC)++
     LD = $(CC)

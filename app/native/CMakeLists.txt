@@ -181,9 +181,43 @@ add_library(sequencer SHARED ${SEQUENCER_SOURCES})
 
 # Link SunVox static library
 if(ANDROID)
-  # Android: Link Android-specific SunVox library
-  # TODO: Add Android SunVox libraries when available
-  target_link_libraries(sequencer OpenSLES log android)
+  # Android: link prebuilt SunVox shared library for the active ABI.
+  # We support a few common locations to keep local workflows flexible.
+  set(SUNVOX_ANDROID_CANDIDATES
+    ${CMAKE_CURRENT_SOURCE_DIR}/sunvox_lib/sunvox_lib/android/sample_project/SunVoxLib/src/main/jniLibs/${ANDROID_ABI}/libsunvox.so
+    ${CMAKE_CURRENT_SOURCE_DIR}/sunvox_lib/sunvox_lib/android/libs/${ANDROID_ABI}/libsunvox.so
+    ${CMAKE_CURRENT_SOURCE_DIR}/sunvox_lib/sunvox_lib/android/${ANDROID_ABI}/libsunvox.so
+    ${CMAKE_CURRENT_SOURCE_DIR}/${ANDROID_ABI}/libsunvox.so
+  )
+
+  set(SUNVOX_ANDROID_LIB "")
+  foreach(candidate ${SUNVOX_ANDROID_CANDIDATES})
+    if(EXISTS "${candidate}")
+      set(SUNVOX_ANDROID_LIB "${candidate}")
+      break()
+    endif()
+  endforeach()
+
+  if(SUNVOX_ANDROID_LIB STREQUAL "")
+    message(FATAL_ERROR
+      "SunVox Android library not found for ABI '${ANDROID_ABI}'. "
+      "Build it with: cd native/sunvox_lib/sunvox_lib/make && bash MAKE_ANDROID, "
+      "then place libsunvox.so under one of:\n"
+      "  1) native/sunvox_lib/sunvox_lib/android/sample_project/SunVoxLib/src/main/jniLibs/${ANDROID_ABI}/\n"
+      "  2) native/sunvox_lib/sunvox_lib/android/libs/${ANDROID_ABI}/\n"
+      "  3) native/sunvox_lib/sunvox_lib/android/${ANDROID_ABI}/\n"
+      "  4) native/${ANDROID_ABI}/")
+  endif()
+
+  add_library(sunvox SHARED IMPORTED)
+  set_target_properties(sunvox PROPERTIES IMPORTED_LOCATION "${SUNVOX_ANDROID_LIB}")
+
+  target_link_libraries(sequencer
+    sunvox
+    OpenSLES
+    log
+    android
+  )
 elseif(APPLE)
   # iOS/macOS: Link iOS static library
   target_link_libraries(sequencer 

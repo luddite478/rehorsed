@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
 import '../../../state/sequencer/recording.dart';
 import '../../../utils/local_audio_path.dart';
+import '../../../utils/share_utils.dart';
 import '../../../state/sequencer/multitask_panel.dart';
 
 class ShareWidget extends StatelessWidget {
@@ -354,6 +355,7 @@ class ShareWidget extends StatelessWidget {
           [XFile(resolved)],
           text: 'Check out my track!',
           subject: 'Music Track',
+          sharePositionOrigin: getSharePositionOrigin(context),
         );
       } else {
         _showError(context, 'Recording file not found');
