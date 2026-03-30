@@ -1,5 +1,7 @@
 # Working State Auto-Save Implementation ✅
 
+> **Note (2026):** This file describes an **older milestone** (thread-based `ThreadsState`, 3s debounce). The **current offline app** uses **patterns**, **`SequencerScreenV2`**, a **5s** debounce, and **pattern-switch flushing** so drafts stay under the correct `pattern_id`. Authoritative docs: **[`OFFLINE_AUTO_SAVE.md`](../../OFFLINE_AUTO_SAVE.md)** and **[`patterns_draft_and_switching.md`](../patterns_draft_and_switching.md)**.
+
 ## Summary
 
 Successfully implemented Google Docs-style auto-save that preserves project modifications even without explicit checkpoint saves. Users can now switch between projects, close the app, or experience crashes without losing any work.

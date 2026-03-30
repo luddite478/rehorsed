@@ -90,6 +90,28 @@ Navigate to sequencer
 User makes changes → Auto-save activates
 ```
 
+### Pattern switch coordination (shared sequencer state)
+
+`TableState` / playback / sample bank are **shared** Provider state. Changing **`PatternsState.activePattern`** (e.g. opening another pattern from the Library) **before** the next sequencer import could previously save the wrong snapshot under the wrong **`pattern_id`**, or leave list previews inconsistent.
+
+**Behavior now:**
+
+1. **`PatternsState.setActivePattern`** — If the new pattern id **differs** from the current one, **all** **`addBeforeActivePatternSwitchListener`** callbacks run **first** (awaited). Each **`SequencerScreenV2`** flushes the current grid to **`working_states/<outgoing_id>.json`** while **`activePattern`** still matches that session.
+2. **`SequencerScreenV2`** tracks **`_loadedPatternId`** for this route instance. Auto-save and dispose-time save only run when **`activePattern?.id == _loadedPatternId`**, and writes use **`updatePatternTimestampForId(patternId)`** for the saved id.
+3. After a successful pre-switch flush, the screen sets **`_suppressAutoSave`** so it does not write again after the shared table belongs to another pattern.
+
+Full detail: [features/patterns_draft_and_switching.md](./features/patterns_draft_and_switching.md).
+
+### Projects list preview (draft vs checkpoint)
+
+For each tile, the snapshot used for the mini preview is resolved as:
+
+1. Working state file for that **`pattern_id`**, if it exists.  
+2. Otherwise **latest checkpoint** snapshot.  
+3. Otherwise an empty template (same as before when nothing existed).
+
+Opening the sequencer from **Library** uses the same **checkpoint fallback** as **Projects** (`PatternScreen(initialSnapshot: …)`), so bootstrap always has a consistent import path when no draft exists.
+
 ## Implementation Details
 
 ### Files Modified
@@ -100,21 +122,25 @@ User makes changes → Auto-save activates
    - Provides save/load/clear APIs
 
 2. **`lib/screens/sequencer_screen_v2.dart`**
-   - Added auto-save timer and state change listeners
-   - Listens to TableState, PlaybackState, SampleBankState changes
-   - Exports snapshot and saves to working state cache
-   - Loads working state on initialization
-   - Properly cleans up on dispose
+   - Auto-save timer and listeners on TableState, PlaybackState, SampleBankState
+   - Registers **`addBeforeActivePatternSwitchListener`**; tracks **`_loadedPatternId`**, **`_suppressAutoSave`**
+   - **`_saveWorkingStateForPatternId`** / guarded **`_performAutoSave`**; loads working state on bootstrap
+   - Cleans up listeners and **`removeBeforeActivePatternSwitchListener`** on dispose
 
 3. **`lib/state/patterns_state.dart`**
-   - Added `updatePatternTimestamp()` method
-   - Updates pattern's `updatedAt` field on auto-save
+   - `updatePatternTimestamp()` / `updatePatternTimestampForId()` for `updatedAt` after saves
+   - `addBeforeActivePatternSwitchListener` / `removeBeforeActivePatternSwitchListener`
+   - `setActivePattern` awaits pre-switch listeners when the active id changes (flush outgoing draft)
    - Ensures patterns show in correct order on projects screen
 
 4. **`lib/screens/projects_screen.dart`**
    - Creates actual Pattern object when user taps "+"
    - Sets pattern as active before navigating to sequencer
    - Uses PatternNameGenerator for default names
+   - Pattern tile preview: working state, else latest checkpoint, else empty template
+
+5. **`lib/screens/library_screen.dart`**
+   - Opens `PatternScreen` with checkpoint fallback snapshot when no working state (aligned with projects screen)
 
 ### Key Components
 
@@ -137,20 +163,27 @@ void _onSequencerStateChanged() {
 
 #### Auto-Save Execution
 
+Saves target the **pattern this screen instance loaded** (`_loadedPatternId`), not merely whatever `activePattern` is at timer fire (guards stacked routes / id races). Pre-switch flush uses the same helper.
+
 ```dart
-Future<void> _performAutoSave() async {
-  // Export current state
+Future<void> _saveWorkingStateForPatternId(String patternId) async {
   final snapshotService = SnapshotService(...);
-  final snapshot = json.decode(snapshotService.exportToJson(...));
-  
-  // Save working state
-  await WorkingStateCacheService.saveWorkingState(
-    activePattern.id,
-    snapshot,
+  final snapshotJson = snapshotService.exportToJson(
+    name: patternNameFor(patternId),
+    id: patternId,
   );
-  
-  // Update pattern timestamp
-  await patternsState.updatePatternTimestamp();
+  await WorkingStateCacheService.saveWorkingState(
+    patternId,
+    json.decode(snapshotJson) as Map<String, dynamic>,
+  );
+  await patternsState.updatePatternTimestampForId(patternId);
+  patternsState.cancelAutoSave();
+}
+
+Future<void> _performAutoSave() async {
+  if (_suppressAutoSave || !_bootstrapComplete || _loadedPatternId == null) return;
+  if (patternsState.activePattern?.id != _loadedPatternId) return;
+  await _saveWorkingStateForPatternId(_loadedPatternId!);
 }
 ```
 

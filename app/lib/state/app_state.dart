@@ -18,28 +18,44 @@ class AppState extends ChangeNotifier {
   bool get isFirstLaunchSession => _tutorialService.isFirstLaunchSession;
   bool get showTutorialPromptThisSession =>
       _tutorialService.showTutorialPromptThisSession;
+  bool get showRunTutorialButtonOnProjectsSettings =>
+      _tutorialService.showRunTutorialButtonOnProjectsSettings;
+  bool get tutorialEntryPromptIsResume =>
+      _tutorialService.tutorialEntryPromptIsResume;
   TutorialStep get activeTutorialStep => _tutorialService.activeTutorialStep;
   bool get isTutorialRunning => _tutorialService.isTutorialRunning;
+  bool get showProjectsCreatePatternFabHighlight =>
+      _tutorialService.showProjectsCreatePatternFabHighlight;
   bool get showCellParamsVolumePointer =>
       _tutorialService.showCellParamsVolumePointer;
-  bool get showCellParamsKeyPointer => _tutorialService.showCellParamsKeyPointer;
+  bool get showCellParamsKeyPointer =>
+      _tutorialService.showCellParamsKeyPointer;
   bool get showCopyPointer => _tutorialService.showCopyPointer;
+  bool get showCopyPasteSourceCellHighlight =>
+      _tutorialService.showCopyPasteSourceCellHighlight;
   bool get showPastePointer => _tutorialService.showPastePointer;
-  bool get showJumpValueTwoPointer =>
-      _tutorialService.showJumpValueTwoPointer;
+  bool get showJumpValueTwoPointer => _tutorialService.showJumpValueTwoPointer;
   bool get showJumpCopyPointer => _tutorialService.showJumpCopyPointer;
   bool get showJumpPastePointer => _tutorialService.showJumpPastePointer;
   bool get showJumpPasteTargetCellPointer =>
       _tutorialService.showJumpPasteTargetCellPointer;
   bool get showJumpPasteButtonOnlyPointer =>
       _tutorialService.showJumpPasteButtonOnlyPointer;
-  bool get showRecordingRecordPointer => _tutorialService.showRecordingRecordPointer;
-  bool get showRecordingPlayPointer => _tutorialService.showRecordingPlayPointer;
+  bool get showRecordingRecordPointer =>
+      _tutorialService.showRecordingRecordPointer;
+  bool get showRecordingPlayPointer =>
+      _tutorialService.showRecordingPlayPointer;
+  int get recordingStepPartIndex => _tutorialService.recordingStepPartIndex;
+  String get recordingStepInstruction =>
+      _tutorialService.recordingStepInstruction;
   bool get showSongRecordingRecordPointer =>
       _tutorialService.showSongRecordingRecordPointer;
-  bool get showSelectModeButtonPointer => _tutorialService.showSelectModeButtonPointer;
-  bool get showSelectModeVolumePointer => _tutorialService.showSelectModeVolumePointer;
-  String get selectModeStepInstruction => _tutorialService.selectModeStepInstruction;
+  bool get showSelectModeButtonPointer =>
+      _tutorialService.showSelectModeButtonPointer;
+  bool get showSelectModeVolumePointer =>
+      _tutorialService.showSelectModeVolumePointer;
+  String get selectModeStepInstruction =>
+      _tutorialService.selectModeStepInstruction;
   int get tutorialStepDisplayIndex => _tutorialService.tutorialStepDisplayIndex;
   String get tutorialStepLabel => _tutorialService.tutorialStepLabel;
 
@@ -108,8 +124,16 @@ class AppState extends ChangeNotifier {
   Future<void> initialize() => _tutorialService.initialize();
   void dismissTutorialPromptForSession() =>
       _tutorialService.dismissTutorialPromptForSession();
+  void dismissProjectsCreatePatternFabHint() =>
+      _tutorialService.dismissProjectsCreatePatternFabHint();
+  void requestRunTutorialFromProjects() =>
+      _tutorialService.requestRunTutorialFromProjects();
+  bool consumeAutoStartTutorialOnProjectCreate() =>
+      _tutorialService.consumeAutoStartTutorialOnProjectCreate();
   void startSequencerQuickTutorial() =>
       _tutorialService.startSequencerQuickTutorial();
+  void resumeSequencerQuickTutorial() =>
+      _tutorialService.resumeSequencerQuickTutorial();
   void advanceTutorialToSelectSample() =>
       _tutorialService.advanceTutorialToSelectSample();
   void completeSampleSelectionStep() =>
@@ -128,7 +152,8 @@ class AppState extends ChangeNotifier {
   void markJumpAction() => _tutorialService.markJumpAction();
   void markJumpValueSetToTwo() => _tutorialService.markJumpValueSetToTwo();
   void markJumpValueCopyAction() => _tutorialService.markJumpValueCopyAction();
-  void markJumpValuePasteAction() => _tutorialService.markJumpValuePasteAction();
+  void markJumpValuePasteAction() =>
+      _tutorialService.markJumpValuePasteAction();
   void markPlayAction() => _tutorialService.markPlayAction();
   void markStopAction() => _tutorialService.markStopAction();
   void markRecordingAction() => _tutorialService.markRecordingAction();
@@ -150,8 +175,10 @@ class AppState extends ChangeNotifier {
   bool get showTakesPlayPointer => _tutorialService.showTakesPlayPointer;
   bool get showTakesAddPointer => _tutorialService.showTakesAddPointer;
   bool get showTakesClosePointer => _tutorialService.showTakesClosePointer;
-  bool get canCloseTakesTutorialStep => _tutorialService.canCloseTakesTutorialStep;
-  bool get showSecondTakeAddPointer => _tutorialService.showSecondTakeAddPointer;
+  bool get canCloseTakesTutorialStep =>
+      _tutorialService.canCloseTakesTutorialStep;
+  bool get showSecondTakeAddPointer =>
+      _tutorialService.showSecondTakeAddPointer;
   bool get showSecondTakeClosePointer =>
       _tutorialService.showSecondTakeClosePointer;
   String get secondTakeStepInstruction =>
@@ -181,8 +208,24 @@ class AppState extends ChangeNotifier {
       _tutorialService.verifyDisableSelectModeStep();
   void verifySecondSectionCreated() =>
       _tutorialService.verifySecondSectionCreated();
-  void verifySectionTwoStepsSetToThirtyTwoStep() =>
-      _tutorialService.verifySectionTwoStepsSetToThirtyTwoStep();
+  bool get showSectionTwoStepsIncreasePointer =>
+      _tutorialService.showSectionTwoStepsIncreasePointer;
+  bool get showSectionTwoStepsDecreasePointer =>
+      _tutorialService.showSectionTwoStepsDecreasePointer;
+  int get sectionTwoStepsHintPartIndex =>
+      _tutorialService.sectionTwoStepsHintPartIndex;
+  String get sectionTwoStepsHintInstruction =>
+      _tutorialService.sectionTwoStepsHintInstruction;
+  void syncSectionTwoStepsHint({
+    required int sectionIndex,
+    required int stepCount,
+    required int sectionsCount,
+  }) =>
+      _tutorialService.syncSectionTwoStepsHint(
+        sectionIndex: sectionIndex,
+        stepCount: stepCount,
+        sectionsCount: sectionsCount,
+      );
   void verifySectionTwoFiveSamplesStep() =>
       _tutorialService.verifySectionTwoFiveSamplesStep();
   void verifyNavigatedToPreviousSectionStep() =>
@@ -208,8 +251,10 @@ class AppState extends ChangeNotifier {
       );
   void markSecondTakeAddToLibraryAction() =>
       _tutorialService.markSecondTakeAddToLibraryAction();
-  void markSecondTakeCloseAction() => _tutorialService.markSecondTakeCloseAction();
-  void markPatternMenuBackAction() => _tutorialService.markPatternMenuBackAction();
+  void markSecondTakeCloseAction() =>
+      _tutorialService.markSecondTakeCloseAction();
+  void markPatternMenuBackAction() =>
+      _tutorialService.markPatternMenuBackAction();
   void markProjectsLibraryFolderOpenAction() =>
       _tutorialService.markProjectsLibraryFolderOpenAction();
   void markLibraryLatestRecordingOpenAction() =>

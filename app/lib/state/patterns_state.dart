@@ -39,6 +39,10 @@ class PatternsState extends ChangeNotifier {
   bool _hasUnsavedChanges = false;
   
   final _uuid = const Uuid();
+
+  /// Sequencer screens register here so [setActivePattern] can flush the current
+  /// draft to disk **before** the active id changes (shared [TableState]).
+  final List<Future<void> Function()> _beforeActivePatternSwitch = [];
   
   // Ensure patterns are always sorted by most recently updated first
   void _sortPatternsByUpdatedAtDesc() {
@@ -490,17 +494,38 @@ class PatternsState extends ChangeNotifier {
     }
   }
   
+  void addBeforeActivePatternSwitchListener(Future<void> Function() listener) {
+    _beforeActivePatternSwitch.add(listener);
+  }
+
+  void removeBeforeActivePatternSwitchListener(Future<void> Function() listener) {
+    _beforeActivePatternSwitch.remove(listener);
+  }
+
   /// Set active pattern and load its checkpoints
   Future<void> setActivePattern(Pattern pattern) async {
     try {
+      if (_activePattern?.id == pattern.id) {
+        if (!_checkpointsByPattern.containsKey(pattern.id)) {
+          await loadCheckpoints(pattern.id);
+        }
+        return;
+      }
+
+      // Flush in-memory sequencer draft for the outgoing pattern while activePattern
+      // still matches that session (shared TableState).
+      for (final fn in List<Future<void> Function()>.from(_beforeActivePatternSwitch)) {
+        await fn();
+      }
+
       _activePattern = pattern;
       notifyListeners();
-      
+
       // Load checkpoints for this pattern if not already loaded
       if (!_checkpointsByPattern.containsKey(pattern.id)) {
         await loadCheckpoints(pattern.id);
       }
-      
+
       debugPrint('📦 [PATTERNS_STATE] Set active pattern: ${pattern.id}');
     } catch (e) {
       debugPrint('❌ [PATTERNS_STATE] Error setting active pattern: $e');
@@ -696,24 +721,30 @@ class PatternsState extends ChangeNotifier {
   /// Update pattern's updatedAt timestamp (for auto-save)
   Future<void> updatePatternTimestamp() async {
     if (_activePattern == null) return;
-    
+    await updatePatternTimestampForId(_activePattern!.id);
+  }
+
+  /// Like [updatePatternTimestamp] but for a specific id (e.g. sequencer saves draft
+  /// for the pattern it loaded, which must match [activePattern] for that session).
+  Future<void> updatePatternTimestampForId(String patternId) async {
     try {
-      final updatedPattern = _activePattern!.copyWith(
+      final index = _patterns.indexWhere((p) => p.id == patternId);
+      if (index < 0) return;
+
+      final updatedPattern = _patterns[index].copyWith(
         updatedAt: DateTime.now(),
       );
-      
+
       await LocalPatternService.savePattern(updatedPattern);
-      
-      // Update in memory
-      final index = _patterns.indexWhere((p) => p.id == _activePattern!.id);
-      if (index >= 0) {
-        _patterns = List.from(_patterns)..[index] = updatedPattern;
+
+      _patterns = List.from(_patterns)..[index] = updatedPattern;
+      if (_activePattern?.id == patternId) {
+        _activePattern = updatedPattern;
       }
-      _activePattern = updatedPattern;
-      
+
       _sortPatternsByUpdatedAtDesc();
       notifyListeners();
-      debugPrint('⏰ [PATTERNS_STATE] Updated pattern timestamp: ${_activePattern!.id}');
+      debugPrint('⏰ [PATTERNS_STATE] Updated pattern timestamp: $patternId');
     } catch (e) {
       debugPrint('❌ [PATTERNS_STATE] Error updating pattern timestamp: $e');
     }
@@ -757,6 +788,7 @@ class PatternsState extends ChangeNotifier {
     _activePattern = null;
     _patterns = [];
     _checkpointsByPattern = {};
+    _beforeActivePatternSwitch.clear();
     _hasLoaded = false;
     _error = null;
     _isLoading = false;

@@ -18,8 +18,8 @@ import 'state/app_state.dart';
 import 'services/local_pattern_service.dart';
 import 'services/local_library_service.dart';
 import 'services/cache/working_state_cache_service.dart';
-import 'services/reliable_storage.dart';
 import 'services/tutorial_service.dart';
+import 'services/tutorial_prefs_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -28,13 +28,13 @@ void main() async {
   ]);
   await dotenv.load(fileName: ".env");
   GoogleFonts.config.allowRuntimeFetching = false;
-  
+
   // Apply DevHttpOverrides for stage environment to trust self-signed certificates
   final env = dotenv.env['ENV'] ?? '';
   if (env == 'stage') {
     HttpOverrides.global = DevHttpOverrides();
   }
-  
+
   runApp(const App());
 }
 
@@ -50,10 +50,10 @@ class App extends StatelessWidget {
         ChangeNotifierProvider(create: (context) => LibraryState()),
         ChangeNotifierProvider(create: (context) => LibrarySamplesState()),
         ChangeNotifierProvider(create: (context) => AppState()),
-        
+
         // Pattern management (replaces thread/collaboration)
         ChangeNotifierProvider(create: (context) => PatternsState()),
-        
+
         // Sequencer states
         ChangeNotifierProvider(create: (context) => SequencerVersionState()),
         ChangeNotifierProvider(create: (context) => TableState()),
@@ -90,7 +90,7 @@ class _MainPageState extends State<MainPage> {
     'CLEAR_STORAGE',
     defaultValue: false,
   );
-  
+
   @override
   void initState() {
     super.initState();
@@ -98,24 +98,24 @@ class _MainPageState extends State<MainPage> {
       _initializeApp();
     });
   }
-  
+
   Future<void> _initializeApp() async {
     final patternsState = context.read<PatternsState>();
     final libraryState = context.read<LibraryState>();
     final appState = context.read<AppState>();
     debugPrint('🧪 [MAIN] CLEAR_STORAGE flag: $_clearStorageOnLaunch');
     await _applyClearStorageIfRequested(patternsState, libraryState);
-    
+
     await Future.wait([
       patternsState.loadPatterns(),
       libraryState.loadLibrary(),
       appState.initialize(),
     ]);
-    
+
     setState(() {
       _isLoading = false;
     });
-    
+
     debugPrint('✅ [MAIN] App initialized - loaded patterns and library');
   }
 
@@ -132,7 +132,10 @@ class _MainPageState extends State<MainPage> {
       LocalPatternService.clearAll(),
       LocalLibraryService.clearAll(),
       WorkingStateCacheService.clearAllWorkingStates(),
-      ReliableStorage.remove(TutorialService.hasLaunchedBeforeKey),
+      TutorialPrefsService.clearKeyIncludingLegacy(
+        TutorialService.hasLaunchedBeforeKey,
+      ),
+      TutorialPrefsService.remove(TutorialService.tutorialPromptDeclinedKey),
     ]);
 
     // Reset in-memory providers to ensure clean reload.
@@ -152,16 +155,15 @@ class _MainPageState extends State<MainPage> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 const Spacer(),
-                
                 ClipRRect(
                   borderRadius: BorderRadius.circular(2),
                   child: LinearProgressIndicator(
                     backgroundColor: Colors.grey[200],
-                    valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFF333333)),
+                    valueColor:
+                        const AlwaysStoppedAnimation<Color>(Color(0xFF333333)),
                     minHeight: 3,
                   ),
                 ),
-                
                 const Spacer(),
               ],
             ),
@@ -179,6 +181,7 @@ class DevHttpOverrides extends HttpOverrides {
   @override
   HttpClient createHttpClient(SecurityContext? context) {
     return super.createHttpClient(context)
-      ..badCertificateCallback = (X509Certificate cert, String host, int port) => true;
+      ..badCertificateCallback =
+          (X509Certificate cert, String host, int port) => true;
   }
 }

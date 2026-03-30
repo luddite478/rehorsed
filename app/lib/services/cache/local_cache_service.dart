@@ -22,7 +22,10 @@ class LocalCacheService {
       final appDocDir = await getApplicationDocumentsDirectory();
       baseDir = appDocDir.path;
     } else if (Platform.isIOS) {
-      baseDir = path.join(Directory.systemTemp.path, appName);
+      // Keep cache under app documents on iOS so autosave drafts are persistent
+      // and are not subject to temporary-directory eviction.
+      final appDocDir = await getApplicationDocumentsDirectory();
+      baseDir = appDocDir.path;
     } else if (Platform.isMacOS) {
       baseDir = '${Platform.environment['HOME']}/Documents/$appName';
     } else if (Platform.isWindows) {

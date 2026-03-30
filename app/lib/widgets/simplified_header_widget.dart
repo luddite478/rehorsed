@@ -6,7 +6,16 @@ import '../state/app_state.dart';
 import 'tutorial_pulse_widget.dart';
 
 class SimplifiedHeaderWidget extends StatelessWidget {
-  const SimplifiedHeaderWidget({Key? key}) : super(key: key);
+  const SimplifiedHeaderWidget({
+    Key? key,
+    this.onLogoTap,
+  }) : super(key: key);
+
+  static const double _logoIconMinSize = 36;
+  static const double _logoIconMaxSize = 64;
+  static const double _logoIconBorderWidth = 1.0;
+
+  final VoidCallback? onLogoTap;
 
   @override
   Widget build(BuildContext context) {
@@ -23,59 +32,83 @@ class SimplifiedHeaderWidget extends StatelessWidget {
           ),
         ),
       ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          Transform.scale(
-            alignment: Alignment.centerLeft,
-            scale: 1.55,
-            child: Image.asset(
-              'icons/white_mane1_cut_gray(1).png',
-              width: 40,
-              height: 40,
-              fit: BoxFit.contain,
-              filterQuality: FilterQuality.high,
-            ),
-          ),
-          const SizedBox(width: 2),
-          
-          // Spacer
-          const Expanded(
-            child: SizedBox(),
-          ),
-          
-          // Right side - Library icon
-          TutorialPulseWidget(
-            enabled: appState.activeTutorialStep ==
-                TutorialStep.sequencerProjectsLibraryHint,
-            borderRadius: BorderRadius.circular(10),
-            child: IconButton(
-              key: appState.activeTutorialStep ==
-                      TutorialStep.sequencerProjectsLibraryHint
-                  ? appState.projectsLibraryFolderTutorialKey
-                  : null,
-              onPressed: () {
-                appState.markProjectsLibraryFolderOpenAction();
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (context) => const LibraryScreen(),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final logoSize = (constraints.maxWidth * 0.18).clamp(
+            _logoIconMinSize,
+            _logoIconMaxSize,
+          );
+          final logoRadius = (logoSize * 0.24).clamp(4.0, 8.0);
+
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Material(
+                color: Colors.transparent,
+                borderRadius: BorderRadius.circular(logoRadius),
+                child: InkWell(
+                  onTap: onLogoTap,
+                  borderRadius: BorderRadius.circular(logoRadius),
+                  child: Container(
+                    width: logoSize,
+                    height: logoSize,
+                    clipBehavior: Clip.antiAlias,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(logoRadius),
+                      image: const DecorationImage(
+                        image: AssetImage('icons/white_mane1_cut_gray(1).png'),
+                        fit: BoxFit.cover,
+                      ),
+                      border: Border.all(
+                        color: const Color.fromARGB(255, 50, 50, 50),
+                        width: _logoIconBorderWidth,
+                      ),
+                    ),
                   ),
-                );
-              },
-              icon: Icon(
-                Icons.folder_outlined,
-                color: AppColors.sequencerText,
-                size: 28,
+                ),
               ),
-              style: IconButton.styleFrom(
-                backgroundColor: Colors.transparent,
+              const SizedBox(width: 2),
+
+              // Spacer
+              const Expanded(
+                child: SizedBox(),
               ),
-              padding: const EdgeInsets.all(8),
-              constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
-            ),
-          ),
-        ],
+
+              // Right side - Library icon
+              TutorialPulseWidget(
+                enabled: appState.activeTutorialStep ==
+                    TutorialStep.sequencerProjectsLibraryHint,
+                borderRadius: BorderRadius.circular(10),
+                child: IconButton(
+                  key: appState.activeTutorialStep ==
+                          TutorialStep.sequencerProjectsLibraryHint
+                      ? appState.projectsLibraryFolderTutorialKey
+                      : null,
+                  onPressed: () {
+                    appState.markProjectsLibraryFolderOpenAction();
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => const LibraryScreen(),
+                      ),
+                    );
+                  },
+                  icon: Icon(
+                    Icons.folder_outlined,
+                    color: AppColors.sequencerText,
+                    size: 28,
+                  ),
+                  style: IconButton.styleFrom(
+                    backgroundColor: Colors.transparent,
+                  ),
+                  padding: const EdgeInsets.all(8),
+                  constraints:
+                      const BoxConstraints(minWidth: 40, minHeight: 40),
+                ),
+              ),
+            ],
+          );
+        },
       ),
     );
   }

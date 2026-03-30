@@ -1,7 +1,7 @@
 description: HypnoPitch — pattern sequencer and audio app.
 environment:
   sdk: '>=3.4.4 <4.0.0'
-version: 1.0.1+6
+version: 1.0.1+7
 flutter:
   assets:
     - samples/acoustic/
@@ -9,6 +9,7 @@ flutter:
     - samples/drums/electronic/
     - samples/drums/electronic/hat/
     - samples/drums/electronic/kick/
+    - samples/drums/electronic/snare/
     - samples/drums/natural/
     - samples/drums/natural/kick/
     - samples/drums/natural/plates/
@@ -38,7 +39,6 @@ dependencies:
   cupertino_icons: ^1.0.6
   google_fonts: ^6.1.0
   flutter_dotenv: ^5.1.0
-  docman: ^1.2.0
   path_provider: ^2.1.1
   ffi: ^2.1.0
   path: ^1.9.0
@@ -49,6 +49,7 @@ dependencies:
   wheel_chooser: ^1.1.2
   uuid: ^4.5.1
   permission_handler: ^11.3.1
+  url_launcher: ^6.3.2
 name: hypnopitch
 publish_to: none
 dev_dependencies:

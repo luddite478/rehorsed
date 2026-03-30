@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
 import '../services/sample_asset_resolver.dart';
+import '../utils/local_audio_path.dart';
 
 class LibrarySampleBrowserItem {
   final String name;
@@ -25,6 +26,7 @@ class LibrarySampleBrowserItem {
 
 class LibrarySamplesState extends ChangeNotifier {
   static const String _defaultRootName = 'Default';
+  static const String customSampleIdPrefix = 'custom:';
   static const Set<String> _audioExtensions = {
     '.wav',
     '.mp3',
@@ -64,6 +66,12 @@ class LibrarySamplesState extends ChangeNotifier {
   List<String> get currentCustomFiles {
     if (_currentCustomFolder == null) return const [];
     final files = List<String>.from(_customFolderFiles[_currentCustomFolder] ?? []);
+    files.sort((a, b) => path.basename(a).compareTo(path.basename(b)));
+    return List.unmodifiable(files);
+  }
+
+  List<String> customFilesForFolder(String folderName) {
+    final files = List<String>.from(_customFolderFiles[folderName] ?? const []);
     files.sort((a, b) => path.basename(a).compareTo(path.basename(b)));
     return List.unmodifiable(files);
   }
@@ -197,6 +205,106 @@ class LibrarySamplesState extends ChangeNotifier {
       createdFolder: existing.isEmpty,
       errorMessage: imported.isEmpty ? 'No supported audio files were imported.' : null,
     );
+  }
+
+  String sampleIdForCustomFile(String folderName, String filePath) {
+    return customSampleIdFor(folderName: folderName, filePath: filePath);
+  }
+
+  static bool isCustomSampleId(String sampleId) {
+    return sampleId.startsWith(customSampleIdPrefix);
+  }
+
+  static String customSampleIdFor({
+    required String folderName,
+    required String filePath,
+  }) {
+    final safeFolder = folderName.trim();
+    final fileName = path.basename(filePath);
+    return '$customSampleIdPrefix$safeFolder/$fileName';
+  }
+
+  static String? customFileNameFromSampleId(String sampleId) {
+    if (!isCustomSampleId(sampleId)) return null;
+    final value = sampleId.substring(customSampleIdPrefix.length);
+    final slashIndex = value.indexOf('/');
+    if (slashIndex <= 0 || slashIndex >= value.length - 1) return null;
+    return value.substring(slashIndex + 1);
+  }
+
+  static String? customFolderFromSampleId(String sampleId) {
+    if (!isCustomSampleId(sampleId)) return null;
+    final value = sampleId.substring(customSampleIdPrefix.length);
+    final slashIndex = value.indexOf('/');
+    if (slashIndex <= 0 || slashIndex >= value.length - 1) return null;
+    return value.substring(0, slashIndex);
+  }
+
+  Future<bool> removeCustomFile({
+    required String folderName,
+    required String filePath,
+  }) async {
+    final files = List<String>.from(_customFolderFiles[folderName] ?? const []);
+    if (files.isEmpty) return false;
+
+    final normalized = LocalAudioPath.normalize(filePath);
+    final match = files.where((f) => LocalAudioPath.normalize(f) == normalized);
+    if (match.isEmpty) return false;
+
+    for (final item in match.toList()) {
+      files.remove(item);
+      try {
+        final file = File(item);
+        if (await file.exists()) {
+          await file.delete();
+        }
+      } catch (_) {}
+    }
+
+    if (files.isEmpty) {
+      _customFolderFiles.remove(folderName);
+      if (_currentCustomFolder == folderName) {
+        openRoot();
+      }
+      try {
+        final docs = await getApplicationDocumentsDirectory();
+        final folderDir = Directory(
+          path.join(docs.path, 'library_samples', 'custom', folderName),
+        );
+        if (await folderDir.exists()) {
+          await folderDir.delete(recursive: true);
+        }
+      } catch (_) {}
+    } else {
+      _customFolderFiles[folderName] = files..sort();
+    }
+
+    await _persistCustomIndex();
+    notifyListeners();
+    return true;
+  }
+
+  static Future<String?> resolveCustomSampleIdPath(String sampleId) async {
+    final folderName = customFolderFromSampleId(sampleId);
+    final fileName = customFileNameFromSampleId(sampleId);
+    if (folderName == null || fileName == null) return null;
+
+    try {
+      final docs = await getApplicationDocumentsDirectory();
+      final directPath = path.join(
+        docs.path,
+        'library_samples',
+        'custom',
+        folderName,
+        fileName,
+      );
+      final direct = File(directPath);
+      if (await direct.exists()) {
+        return direct.path;
+      }
+    } catch (_) {}
+
+    return LocalAudioPath.resolve(fileName);
   }
 
   Future<void> _loadBuiltInManifest() async {

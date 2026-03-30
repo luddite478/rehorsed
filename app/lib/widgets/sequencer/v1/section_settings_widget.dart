@@ -496,9 +496,13 @@ class _SectionSettingsWidgetState extends State<SectionSettingsWidget> {
                 _buildArrowButton(
                   context,
                   key: appState.activeTutorialStep ==
-                          TutorialStep.sequencerSectionTwoStepsHint
+                              TutorialStep.sequencerSectionTwoStepsHint &&
+                          appState.showSectionTwoStepsDecreasePointer
                       ? appState.sectionStepsDecreaseTutorialKey
                       : null,
+                  pulseHighlight: appState.activeTutorialStep ==
+                          TutorialStep.sequencerSectionTwoStepsHint &&
+                      appState.showSectionTwoStepsDecreasePointer,
                   icon: Icons.chevron_left,
                   onTap: () {
                     if (!appState.canInteractWithTutorialTarget(
@@ -536,11 +540,13 @@ class _SectionSettingsWidgetState extends State<SectionSettingsWidget> {
                 _buildArrowButton(
                   context,
                   key: appState.activeTutorialStep ==
-                          TutorialStep.sequencerSectionTwoStepsHint
+                              TutorialStep.sequencerSectionTwoStepsHint &&
+                          appState.showSectionTwoStepsIncreasePointer
                       ? appState.sectionStepsIncreaseTutorialKey
                       : null,
                   pulseHighlight: appState.activeTutorialStep ==
-                      TutorialStep.sequencerSectionTwoStepsHint,
+                          TutorialStep.sequencerSectionTwoStepsHint &&
+                      appState.showSectionTwoStepsIncreasePointer,
                   icon: Icons.chevron_right,
                   onTap: () {
                     if (!appState.canInteractWithTutorialTarget(

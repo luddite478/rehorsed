@@ -1,6 +1,7 @@
 import '../../utils/log.dart';
 import 'package:flutter/foundation.dart';
 import '../../services/sample_asset_resolver.dart';
+import '../library_samples_state.dart';
 import 'sample_bank.dart';
 import 'playback.dart';
 
@@ -29,10 +30,11 @@ void _sortSampleBankFolders(List<String> folders) {
 // Temporary sample browser state for the new sequencer implementation
 // This integrates the existing sample browser logic with our new sequencer
 class SampleBrowserState extends ChangeNotifier {
+  static const String _customRootSegment = 'custom';
   bool _isVisible = false;
   bool _isLoading = true;
   List<String> _currentPath = [];
-  List<SampleItem> _currentItems = [];
+  final List<SampleItem> _currentItems = [];
   Map<String, dynamic>? _manifestData;
   String? _assetErrorMessage;
   int? _targetStep;
@@ -40,6 +42,13 @@ class SampleBrowserState extends ChangeNotifier {
   /// Bank slot for load/place (A–Z index). When null, UI should use [SampleBankState.activeSlot].
   /// [targetCol] is only the grid column; conflating the two made every cell in a column share one color.
   int? _targetBankSlot;
+  final LibrarySamplesState? _librarySamplesState;
+
+  SampleBrowserState({
+    LibrarySamplesState? librarySamplesState,
+  }) : _librarySamplesState = librarySamplesState {
+    _librarySamplesState?.addListener(_onLibrarySamplesChanged);
+  }
   
   bool get isVisible => _isVisible;
   bool get isLoading => _isLoading;
@@ -49,6 +58,16 @@ class SampleBrowserState extends ChangeNotifier {
   int? get targetCol => _targetCol;
   int? get targetBankSlot => _targetBankSlot;
   String? get assetErrorMessage => _assetErrorMessage;
+
+  bool get _isInCustomBranch =>
+      _currentPath.isNotEmpty && _currentPath.first == _customRootSegment;
+
+  bool get _hasCustomFolders =>
+      (_librarySamplesState?.customFolders.isNotEmpty ?? false);
+
+  void _onLibrarySamplesChanged() {
+    _refreshCurrentItems();
+  }
   
   // Initialize the sample browser with manifest data
   Future<void> initialize() async {
@@ -57,6 +76,7 @@ class SampleBrowserState extends ChangeNotifier {
     notifyListeners();
     
     try {
+      await _librarySamplesState?.initialize();
       final sampleResolver = SampleAssetResolver.instance;
       final samplesMap = await sampleResolver.loadSamplesManifest();
       if (samplesMap.isNotEmpty) {
@@ -107,7 +127,23 @@ class SampleBrowserState extends ChangeNotifier {
     final normalized = samplePath.replaceAll('\\', '/');
     final markerIndex = normalized.indexOf('samples/');
     if (markerIndex < 0) {
-      Log.d('📁 Sample path has no samples/ segment, keeping current path: $samplePath');
+      const customMarker = '/library_samples/custom/';
+      final customIndex = normalized.indexOf(customMarker);
+      if (customIndex >= 0) {
+        final customRelative =
+            normalized.substring(customIndex + customMarker.length);
+        final customParts =
+            customRelative.split('/').where((p) => p.isNotEmpty).toList();
+        if (customParts.isNotEmpty) {
+          final folder = customParts.first;
+          _currentPath = [_customRootSegment, folder];
+          _refreshCurrentItems();
+          Log.d('📁 Navigated to custom sample folder: $folder');
+          return;
+        }
+      }
+      Log.d(
+          '📁 Sample path has no samples/ segment, keeping current path: $samplePath');
       return;
     }
 
@@ -216,40 +252,101 @@ class SampleBrowserState extends ChangeNotifier {
   // Refresh current items based on current path
   void _refreshCurrentItems() {
     _currentItems.clear();
-    
-    if (_manifestData == null) {
-      Log.d('📁 No manifest data available');
+
+    if (_isInCustomBranch) {
+      _refreshCustomItems();
+      Log.d('📁 Refreshed custom items for path: ${_currentPath.join('/')}');
+      notifyListeners();
       return;
     }
-    
+
+    if (_manifestData != null) {
+      _refreshBuiltInItems();
+    } else {
+      Log.d('📁 No manifest data available');
+    }
+
+    if (_currentPath.isEmpty && _hasCustomFolders) {
+      _currentItems.add(
+        SampleItem(
+          name: _customRootSegment,
+          isFolder: true,
+          path: 'samples/$_customRootSegment',
+          isCustom: true,
+        ),
+      );
+    }
+
+    Log.d('📁 Refreshed items for path: ${_currentPath.join('/')}');
+    Log.d('📁 Current items count: ${_currentItems.length}');
+    notifyListeners();
+  }
+
+  void _refreshCustomItems() {
+    final customFolders = _librarySamplesState?.customFolders ?? const <String>[];
+    if (_currentPath.length == 1) {
+      for (final folder in customFolders) {
+        _currentItems.add(
+          SampleItem(
+            name: folder,
+            isFolder: true,
+            path: 'samples/$_customRootSegment/$folder',
+            isCustom: true,
+          ),
+        );
+      }
+      return;
+    }
+
+    final folderName = _currentPath[1];
+    final files = _librarySamplesState?.customFilesForFolder(folderName) ??
+        const <String>[];
+    for (final filePath in files) {
+      _currentItems.add(
+        SampleItem(
+          name: filePath.split('/').last,
+          isFolder: false,
+          path: filePath,
+          sampleId: LibrarySamplesState.customSampleIdFor(
+            folderName: folderName,
+            filePath: filePath,
+          ),
+          isCustom: true,
+        ),
+      );
+    }
+  }
+
+  void _refreshBuiltInItems() {
     // Build virtual folder structure from flat manifest
     final folders = <String>{};
     final files = <SampleItem>[];
-    
+
     // Get the current path prefix
     final currentPathPrefix = _currentPath.join('/');
-    final searchPrefix = currentPathPrefix.isEmpty ? 'samples/' : 'samples/$currentPathPrefix/';
-    
+    final searchPrefix =
+        currentPathPrefix.isEmpty ? 'samples/' : 'samples/$currentPathPrefix/';
+
     Log.d('📁 Searching for items with prefix: $searchPrefix');
-    
+
     // Go through all samples in manifest
     int totalSamples = 0;
     int matchingSamples = 0;
-    
+
     for (final entry in _manifestData!.entries) {
       totalSamples++;
       final sampleId = entry.key;
       final sampleData = entry.value;
-      
+
       if (sampleData is Map && sampleData.containsKey('path')) {
         final fullPath = sampleData['path'] as String;
-        
+
         // Check if this sample is in the current directory
         if (fullPath.startsWith(searchPrefix)) {
           matchingSamples++;
           final relativePath = fullPath.substring(searchPrefix.length);
           final pathParts = relativePath.split('/');
-          
+
           if (pathParts.length == 1) {
             // This is a file in current directory
             files.add(SampleItem(
@@ -265,7 +362,7 @@ class SampleBrowserState extends ChangeNotifier {
         }
       }
     }
-    
+
     // Add folders first (built-in order, then others alphabetically)
     final sortedFolders = folders.toList();
     _sortSampleBankFolders(sortedFolders);
@@ -276,18 +373,20 @@ class SampleBrowserState extends ChangeNotifier {
         path: '$searchPrefix$folder',
       ));
     }
-    
+
     // Add files (sorted by name)
     files.sort((a, b) => a.name.compareTo(b.name));
     _currentItems.addAll(files);
-    
-    Log.d('📁 Refreshed items for path: ${_currentPath.join('/')}');
+
     Log.d('📁 Total samples in manifest: $totalSamples');
     Log.d('📁 Matching samples: $matchingSamples');
     Log.d('📁 Found ${folders.length} folders, ${files.length} files');
-    Log.d('📁 Current items count: ${_currentItems.length}');
-    
-    notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    _librarySamplesState?.removeListener(_onLibrarySamplesChanged);
+    super.dispose();
   }
 }
 
@@ -297,14 +396,17 @@ class SampleItem {
   final bool isFolder;
   final String path;
   final String? sampleId; // ID from manifest for files
+  final bool isCustom;
   
   SampleItem({
     required this.name,
     required this.isFolder,
     required this.path,
     this.sampleId,
+    this.isCustom = false,
   });
   
   @override
-  String toString() => 'SampleItem(name: $name, isFolder: $isFolder, path: $path, sampleId: $sampleId)';
+  String toString() =>
+      'SampleItem(name: $name, isFolder: $isFolder, path: $path, sampleId: $sampleId, isCustom: $isCustom)';
 }

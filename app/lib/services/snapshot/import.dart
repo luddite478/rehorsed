@@ -242,10 +242,18 @@ class SnapshotImporter {
 
         if (loaded && sampleId != null && filePath != null) {
           // Try to load the sample using the manifest ID
-          final success = await _sampleBankState.loadSample(i, sampleId);
+          var success = await _sampleBankState.loadSample(i, sampleId);
           if (!success) {
-            debugPrint('⚠️ [SNAPSHOT_IMPORT] Failed to load sample $i with id $sampleId');
-            // Continue with other samples
+            // Fall back to filesystem path for non-manifest/custom/local samples.
+            success = await _sampleBankState.loadRecordedAudio(
+              i,
+              filePath,
+              displayName: sampleData['display_name'] as String?,
+            );
+          }
+          if (!success) {
+            debugPrint(
+                '⚠️ [SNAPSHOT_IMPORT] Failed to load sample $i with id $sampleId');
           }
         }
 

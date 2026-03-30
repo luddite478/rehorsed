@@ -30,6 +30,7 @@ import '../state/sequencer/slider_overlay.dart';
 import '../state/sequencer/undo_redo.dart';
 import '../state/sequencer/ui_selection.dart';
 import '../state/sequencer/recording_waveform.dart';
+import '../state/library_samples_state.dart';
 import 'sequencer_settings_screen.dart';
 import '../services/snapshot/snapshot_service.dart';
 import '../services/cache/working_state_cache_service.dart';
@@ -74,13 +75,21 @@ class _SequencerScreenV2State extends State<SequencerScreenV2>
   late final SliderOverlayState _sliderOverlayState;
   late final UndoRedoState _undoRedoState;
 
-  bool _isInitialLoading = false;
+  // Start covered to avoid one-frame flicker before bootstrap begins.
+  bool _isInitialLoading = true;
   bool _isFinalizingTake = false;
 
   // Auto-save
   Timer? _autoSaveTimer;
   static const _autoSaveDelay = Duration(seconds: 5);
   PatternsState? _patternsStateRef; // Cache reference for dispose
+
+  /// Draft is always saved under this id for this screen instance (see [_performAutoSave]).
+  String? _loadedPatternId;
+  bool _bootstrapComplete = false;
+  /// After [PatternsState.setActivePattern] flushes this screen's draft, shared table may belong to another pattern.
+  bool _suppressAutoSave = false;
+
   int _playbackBarBuildCount = 0;
 
   @override
@@ -94,7 +103,9 @@ class _SequencerScreenV2State extends State<SequencerScreenV2>
     _tableState = Provider.of<TableState>(context, listen: false);
     _playbackState = Provider.of<PlaybackState>(context, listen: false);
     _sampleBankState = Provider.of<SampleBankState>(context, listen: false);
-    _sampleBrowserState = SampleBrowserState();
+    _sampleBrowserState = SampleBrowserState(
+      librarySamplesState: Provider.of<LibrarySamplesState>(context, listen: false),
+    );
     _multitaskPanelState = MultitaskPanelState();
     _soundSettingsState = SoundSettingsState();
     _uiSelectionState = UiSelectionState();
@@ -132,6 +143,8 @@ class _SequencerScreenV2State extends State<SequencerScreenV2>
 
     // Cache PatternsState reference for later use (including dispose)
     _patternsStateRef = Provider.of<PatternsState>(context, listen: false);
+    _patternsStateRef!.addBeforeActivePatternSwitchListener(
+        _onBeforeActivePatternSwitch);
 
     // Set up auto-save listeners
     _setupAutoSaveListeners();
@@ -181,9 +194,12 @@ class _SequencerScreenV2State extends State<SequencerScreenV2>
         }
         break;
       case TutorialStep.sequencerSectionTwoStepsHint:
-        if (_tableState.sectionsCount > 1 &&
-            _tableState.getSectionStepCount(1) >= 32) {
-          appState.verifySectionTwoStepsSetToThirtyTwoStep();
+        if (_tableState.sectionsCount > 1) {
+          appState.syncSectionTwoStepsHint(
+            sectionIndex: 1,
+            stepCount: _tableState.getSectionStepCount(1),
+            sectionsCount: _tableState.sectionsCount,
+          );
         }
         break;
       case TutorialStep.sequencerSectionsNavigateHint:
@@ -207,40 +223,76 @@ class _SequencerScreenV2State extends State<SequencerScreenV2>
     }
   }
 
-  // Perform the actual auto-save
-  Future<void> _performAutoSave() async {
+  /// Persists the current shared sequencer state to working storage for [patternId].
+  Future<void> _saveWorkingStateForPatternId(String patternId) async {
     final patternsState = _patternsStateRef;
     if (patternsState == null) return;
 
-    final activePattern = patternsState.activePattern;
-    if (activePattern == null) return;
+    var patternName = 'Pattern';
+    for (final p in patternsState.patterns) {
+      if (p.id == patternId) {
+        patternName = p.name;
+        break;
+      }
+    }
+
+    final snapshotService = SnapshotService(
+      tableState: _tableState,
+      playbackState: _playbackState,
+      sampleBankState: _sampleBankState,
+    );
+
+    final snapshotJson = snapshotService.exportToJson(
+      name: patternName,
+      id: patternId,
+    );
+    final snapshot = json.decode(snapshotJson) as Map<String, dynamic>;
+
+    await WorkingStateCacheService.saveWorkingState(patternId, snapshot);
+    await patternsState.updatePatternTimestampForId(patternId);
+    patternsState.cancelAutoSave();
+  }
+
+  Future<void> _onBeforeActivePatternSwitch() async {
+    if (!_bootstrapComplete || _loadedPatternId == null || _suppressAutoSave) {
+      return;
+    }
+    final patternsState = _patternsStateRef;
+    if (patternsState == null) return;
+    if (patternsState.activePattern?.id != _loadedPatternId) return;
+
+    _autoSaveTimer?.cancel();
+    try {
+      await _saveWorkingStateForPatternId(_loadedPatternId!);
+      Log.d(
+        '💾 Flushed draft before pattern switch (${_loadedPatternId!})',
+        'SEQUENCER_V2',
+      );
+      _suppressAutoSave = true;
+    } catch (e) {
+      Log.e('Pre-switch flush failed', 'SEQUENCER_V2', e);
+    }
+  }
+
+  // Perform the actual auto-save
+  Future<void> _performAutoSave() async {
+    final patternsState = _patternsStateRef;
+    if (patternsState == null ||
+        _suppressAutoSave ||
+        !_bootstrapComplete ||
+        _loadedPatternId == null) {
+      return;
+    }
+
+    // If global active pattern no longer matches this session, do not write shared
+    // table into the wrong pattern file (handled by pre-switch flush + suppress).
+    if (patternsState.activePattern?.id != _loadedPatternId) {
+      return;
+    }
 
     try {
-      // Export current sequencer state
-      final snapshotService = SnapshotService(
-        tableState: _tableState,
-        playbackState: _playbackState,
-        sampleBankState: _sampleBankState,
-      );
-
-      final snapshotJson = snapshotService.exportToJson(
-        name: activePattern.name,
-        id: activePattern.id,
-      );
-      final snapshot = json.decode(snapshotJson) as Map<String, dynamic>;
-
-      // Save working state
-      await WorkingStateCacheService.saveWorkingState(
-        activePattern.id,
-        snapshot,
-      );
-
-      // Update pattern timestamp so it shows as recently modified
-      await patternsState.updatePatternTimestamp();
-
-      patternsState.cancelAutoSave(); // Reset unsaved changes flag
-
-      Log.d('💾 Auto-saved pattern ${activePattern.name}', 'SEQUENCER_V2');
+      await _saveWorkingStateForPatternId(_loadedPatternId!);
+      Log.d('💾 Auto-saved pattern $_loadedPatternId', 'SEQUENCER_V2');
     } catch (e) {
       Log.e('Auto-save failed', 'SEQUENCER_V2', e);
     }
@@ -322,6 +374,10 @@ class _SequencerScreenV2State extends State<SequencerScreenV2>
     } catch (e) {
       Log.e('Initial sequencer bootstrap failed', 'SEQUENCER_V2', e);
     } finally {
+      final ps = _patternsStateRef;
+      final active = ps?.activePattern;
+      _loadedPatternId = active?.id;
+      _bootstrapComplete = true;
       if (mounted) {
         setState(() {
           _isInitialLoading = false;
@@ -424,9 +480,17 @@ class _SequencerScreenV2State extends State<SequencerScreenV2>
   void dispose() {
     Log.d('Disposing sequencer state system', 'SEQUENCER_V2');
 
+    _patternsStateRef
+        ?.removeBeforeActivePatternSwitchListener(_onBeforeActivePatternSwitch);
+
     // Cancel auto-save timer and force immediate save
     _autoSaveTimer?.cancel();
-    _performAutoSave();
+    if (!_suppressAutoSave &&
+        _bootstrapComplete &&
+        _loadedPatternId != null &&
+        _patternsStateRef?.activePattern?.id == _loadedPatternId) {
+      _performAutoSave();
+    }
 
     // Remove auto-save listeners
     _tableState.removeListener(_onSequencerStateChanged);
@@ -507,8 +571,10 @@ class _SequencerScreenV2State extends State<SequencerScreenV2>
           children: [
             // Sequencer view only (thread view removed)
             _buildSequencerView(),
+            // After bootstrap so grid anchors exist and Yes does not race load.
             if (appState.showTutorialPromptThisSession &&
-                tutorialStep == TutorialStep.none)
+                tutorialStep == TutorialStep.none &&
+                !_isInitialLoading)
               Positioned.fill(
                 child: _buildTutorialEntryDialog(appState),
               ),
@@ -562,14 +628,14 @@ class _SequencerScreenV2State extends State<SequencerScreenV2>
               _SequencerTutorialAnchorOverlay(
                 anchorKey: appState.firstCellTutorialKey,
                 label: appState.tutorialStepLabel,
-                text: 'Press cell 1/1 in the sample grid',
+                text: 'Tap on this cell in the sample grid',
                 centerText: true,
               ),
             if (tutorialStep == TutorialStep.sequencerSelectSampleHint)
               _SequencerTutorialAnchorOverlay(
                 anchorKey: appState.selectSampleTutorialKey,
                 label: appState.tutorialStepLabel,
-                text: 'Select sample for this cell',
+                text: 'Select sample for this cell. Choose any sample from the library.',
               ),
             if (tutorialStep == TutorialStep.sequencerCellParamsHint)
               _SequencerTutorialAnchorOverlay(
@@ -587,8 +653,12 @@ class _SequencerScreenV2State extends State<SequencerScreenV2>
                 anchorKey: appState.showCopyPointer
                     ? appState.copyButtonTutorialKey
                     : appState.copyPasteTargetCellTutorialKey,
+                secondaryAnchorKey:
+                    appState.showCopyPasteSourceCellHighlight
+                        ? appState.copyPasteTargetCellTutorialKey
+                        : null,
                 label: appState.tutorialStepLabel,
-                text: 'Try to copy and paste the sample cell',
+                text: 'Select this cell again, then press Copy, then select another cell and press Paste.',
               ),
             if (tutorialStep == TutorialStep.sequencerDeleteHint)
               _SequencerTutorialAnchorOverlay(
@@ -624,7 +694,7 @@ class _SequencerScreenV2State extends State<SequencerScreenV2>
                         : null),
                 label: appState.tutorialStepLabel,
                 text:
-                    'Copy a sample, then press Paste three times (Jump spacing is 2).',
+                    'Copy a sample, then select cell below and press Paste three times (Jump spacing is 2).',
               ),
             if (tutorialStep == TutorialStep.sequencerPlaybackHint)
               _SequencerTutorialAnchorOverlay(
@@ -638,8 +708,7 @@ class _SequencerScreenV2State extends State<SequencerScreenV2>
                     ? appState.playButtonTutorialKey
                     : appState.recordButtonTutorialKey,
                 label: appState.tutorialStepLabel,
-                text:
-                    'Press Record, then press Play, then press Record button again after some time to stop recording.',
+                text: appState.recordingStepInstruction,
               ),
             if (tutorialStep == TutorialStep.sequencerLayersHint)
               _SequencerTutorialAnchorOverlay(
@@ -676,10 +745,11 @@ class _SequencerScreenV2State extends State<SequencerScreenV2>
               ),
             if (tutorialStep == TutorialStep.sequencerSectionTwoStepsHint)
               _SequencerTutorialAnchorOverlay(
-                anchorKey: appState.sectionStepsIncreaseTutorialKey,
+                anchorKey: appState.showSectionTwoStepsIncreasePointer
+                    ? appState.sectionStepsIncreaseTutorialKey
+                    : appState.sectionStepsDecreaseTutorialKey,
                 label: appState.tutorialStepLabel,
-                text:
-                    'Scroll down and use + (plus) to increase the step count of section 2 to 32.',
+                text: appState.sectionTwoStepsHintInstruction,
                 textPosition: _TutorialTextPosition.top,
               ),
             if (tutorialStep == TutorialStep.sequencerSectionTwoSamplesHint)
@@ -687,8 +757,9 @@ class _SequencerScreenV2State extends State<SequencerScreenV2>
                 anchorKey: appState.sampleGridTutorialKey,
                 label: appState.tutorialStepLabel,
                 text:
-                    'Place at least 5 samples in five different cells in this new section.',
-                centerText: true,
+                    'Place at least 5 samples in five different cells in this section.',
+                centerText: false,
+                textPosition: _TutorialTextPosition.bottom,
                 centerInRectKey: appState.sampleGridTutorialKey,
                 drawCoachArrow: false,
               ),
@@ -787,7 +858,9 @@ class _SequencerScreenV2State extends State<SequencerScreenV2>
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Text(
-                        'Run quick tutorial?',
+                        appState.tutorialEntryPromptIsResume
+                            ? 'Proceed with tutorial?'
+                            : 'Run quick tutorial?',
                         textAlign: TextAlign.center,
                         style: TextStyle(
                           color: AppColors.sequencerText,
@@ -800,7 +873,9 @@ class _SequencerScreenV2State extends State<SequencerScreenV2>
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
                           ElevatedButton(
-                            onPressed: appState.startSequencerQuickTutorial,
+                            onPressed: appState.tutorialEntryPromptIsResume
+                                ? appState.resumeSequencerQuickTutorial
+                                : appState.startSequencerQuickTutorial,
                             style: ElevatedButton.styleFrom(
                               backgroundColor: AppColors.sequencerAccent,
                               foregroundColor: Colors.white,
@@ -813,9 +888,11 @@ class _SequencerScreenV2State extends State<SequencerScreenV2>
                                 borderRadius: BorderRadius.circular(8),
                               ),
                             ),
-                            child: const Text(
-                              'Yes',
-                              style: TextStyle(
+                            child: Text(
+                              appState.tutorialEntryPromptIsResume
+                                  ? 'Proceed'
+                                  : 'Yes',
+                              style: const TextStyle(
                                 fontSize: 13,
                                 fontWeight: FontWeight.w700,
                               ),
@@ -1752,34 +1829,70 @@ class _SequencerTutorialAnchorOverlayState
           }
 
           final safeTop = MediaQuery.of(context).padding.top + 10;
+          final safeBottom = MediaQuery.of(context).padding.bottom;
           final resolvedAnchorRect = anchorRect ?? centerRect;
           final resolvedSecondaryAnchorRect = anchorsReady
               ? secondaryAnchorRect
               : null;
-          // Percent-based insets with safety buffer to prevent edge overflow.
+          final ti = appState.activeTutorialTextInsets;
+          // Percent-based edge insets with safety buffer to prevent edge overflow.
           final leftInset = max(8.0,
-              (viewport.width * appState.activeTutorialTextInsets.left).floorToDouble());
+              (viewport.width * ti.left).floorToDouble());
           final rightInset = max(8.0,
-              (viewport.width * appState.activeTutorialTextInsets.right).floorToDouble());
+              (viewport.width * ti.right).floorToDouble());
           final topInset = max(0.0,
-              (viewport.height * appState.activeTutorialTextInsets.top).floorToDouble());
+              (viewport.height * ti.top).floorToDouble());
           final bottomInset = max(0.0,
-              (viewport.height * appState.activeTutorialTextInsets.bottom).floorToDouble());
+              (viewport.height * ti.bottom).floorToDouble());
           final availableForCard =
               max(0.0, viewport.width - leftInset - rightInset);
           final textWidth = min(272.0, availableForCard * 0.995).floorToDouble();
-          const cardHeightEstimate = 126.0;
-          final minL = leftInset;
-          final maxL = max(minL, viewport.width - textWidth - rightInset);
-          // Absolute top/bottom bounds that account for safe area + percent inset.
-          final absoluteMinTop = max(safeTop, safeTop + topInset);
-          final absoluteMaxTop = max(
-            absoluteMinTop,
-            viewport.height - cardHeightEstimate - bottomInset - 8,
+          final maxCardBodyHeight = max(
+            120.0,
+            min(
+              viewport.height * ti.maxCardHeightFraction,
+              viewport.height - safeTop - safeBottom - 16,
+            ),
           );
           final position = widget.centerText
               ? _TutorialTextPosition.center
               : widget.textPosition;
+          const cardHeightEstimate = 126.0;
+          final useStep15BottomLayout =
+              appState.activeTutorialStep ==
+                      TutorialStep.sequencerSectionTwoSamplesHint &&
+                  position == _TutorialTextPosition.bottom;
+          // Pre-change layout used a fixed height for all steps; step 15 (bottom) uses
+          // a measured height so long copy stays on screen.
+          const tutorialCardChromeExcludingBody = 94.0;
+          final layoutCardHeight = useStep15BottomLayout
+              ? min(
+                  viewport.height * 0.92,
+                  max(
+                    cardHeightEstimate,
+                    ti.cardPaddingVertical * 2 +
+                        tutorialCardChromeExcludingBody +
+                        maxCardBodyHeight,
+                  ),
+                )
+              : cardHeightEstimate;
+          final minL = leftInset;
+          final maxL = max(minL, viewport.width - textWidth - rightInset);
+          // Absolute top/bottom bounds that account for safe area + percent inset.
+          final absoluteMinTop = max(safeTop, safeTop + topInset);
+          final absoluteMaxTop = useStep15BottomLayout
+              ? max(
+                  absoluteMinTop,
+                  viewport.height -
+                      layoutCardHeight -
+                      bottomInset -
+                      safeBottom -
+                      8,
+                )
+              : max(
+                  absoluteMinTop,
+                  viewport.height - cardHeightEstimate - bottomInset - 8,
+                );
           double desiredLeft;
           double desiredTop;
           switch (position) {
@@ -1789,12 +1902,21 @@ class _SequencerTutorialAnchorOverlayState
               break;
             case _TutorialTextPosition.right:
               desiredLeft = resolvedAnchorRect.right + 12;
-              desiredTop = resolvedAnchorRect.center.dy - (cardHeightEstimate / 2);
+              desiredTop =
+                  resolvedAnchorRect.center.dy - (layoutCardHeight / 2);
               break;
             case _TutorialTextPosition.center:
               desiredLeft = textLayoutRect.center.dx - textWidth / 2;
               desiredTop =
-                  textLayoutRect.center.dy - (cardHeightEstimate / 2);
+                  textLayoutRect.center.dy - (layoutCardHeight / 2);
+              break;
+            case _TutorialTextPosition.bottom:
+              desiredLeft = textLayoutRect.center.dx - textWidth / 2;
+              desiredTop = viewport.height -
+                  layoutCardHeight -
+                  bottomInset -
+                  safeBottom -
+                  8;
               break;
           }
 
@@ -1815,18 +1937,18 @@ class _SequencerTutorialAnchorOverlayState
               final minTop = max(absoluteMinTop, textLayoutRect.top + 8);
               final maxTop = min(
                 absoluteMaxTop,
-                textLayoutRect.bottom - cardHeightEstimate - 8,
+                textLayoutRect.bottom - layoutCardHeight - 8,
               );
               return desiredTop.clamp(minTop, max(minTop, maxTop)).toDouble();
             }
             return desiredTop.clamp(absoluteMinTop, absoluteMaxTop).toDouble();
           })();
           final textCenter = Offset(
-              textLeft + (textWidth / 2), textTop + (cardHeightEstimate / 2));
+              textLeft + (textWidth / 2), textTop + (layoutCardHeight / 2));
           final swipeHintTopUpper =
               max(resolvedAnchorRect.top, resolvedAnchorRect.bottom - 12.0);
           final swipeHintTop =
-              (textTop + cardHeightEstimate + 8.0)
+              (textTop + layoutCardHeight + 8.0)
                   .clamp(resolvedAnchorRect.top, swipeHintTopUpper)
                   .toDouble();
           final swipeHintRect =
@@ -1965,8 +2087,10 @@ class _SequencerTutorialAnchorOverlayState
                 top: textTop,
                 width: textWidth,
                 child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 30, vertical: 10),
+                  padding: EdgeInsets.symmetric(
+                    horizontal: ti.cardPaddingHorizontal,
+                    vertical: ti.cardPaddingVertical,
+                  ),
                   decoration: BoxDecoration(
                     color: AppColors.tutorialTextOverlayColor,
                     borderRadius: BorderRadius.circular(8),
@@ -1975,10 +2099,7 @@ class _SequencerTutorialAnchorOverlayState
                   ),
                   child: ConstrainedBox(
                     constraints: BoxConstraints(
-                      maxHeight: max(
-                        120.0,
-                        min(viewport.height * 0.48, viewport.height - safeTop - 24),
-                      ),
+                      maxHeight: maxCardBodyHeight,
                     ),
                     child: SingleChildScrollView(
                       physics: const ClampingScrollPhysics(),
@@ -2105,6 +2226,7 @@ enum _TutorialTextPosition {
   center,
   top,
   right,
+  bottom,
 }
 
 Rect? _tutorialResolveAnchorRect(GlobalKey key, Size viewport) {

@@ -1,7 +1,8 @@
 import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
-import 'reliable_storage.dart';
+import 'tutorial_prefs_service.dart';
 
 enum TutorialStep {
   none,
@@ -33,22 +34,33 @@ enum TutorialStep {
   sequencerLibraryLatestRecordingHint,
 }
 
-/// Percent-based padding/inset configuration for the tutorial text card.
+/// Layout for the sequencer tutorial text card.
 ///
-/// Values are percentages of the overlay viewport:
-/// - `left/right` are percentages of viewport width
-/// - `top/bottom` are percentages of viewport height
+/// Edge insets (0–1 fractions of viewport width/height) shrink where the card may
+/// be placed. Inner padding and [maxCardHeightFraction] apply to the card itself.
 class TutorialTextInsets {
   final double left;
   final double right;
   final double top;
   final double bottom;
 
+  /// Cap for the scrollable body height as a fraction of viewport height.
+  final double maxCardHeightFraction;
+
+  /// Inner horizontal padding of the card (logical pixels).
+  final double cardPaddingHorizontal;
+
+  /// Inner vertical padding of the card (logical pixels).
+  final double cardPaddingVertical;
+
   const TutorialTextInsets({
     required this.left,
     required this.right,
     required this.top,
     required this.bottom,
+    this.maxCardHeightFraction = 0.48,
+    this.cardPaddingHorizontal = 30,
+    this.cardPaddingVertical = 10,
   });
 }
 
@@ -89,20 +101,33 @@ class TutorialService extends ChangeNotifier {
   /// Keep disabled until flow/content is finalized.
   static const bool isEnabled = true;
   static const String hasLaunchedBeforeKey = 'app_has_launched_before';
+  static const String quickTutorialCompletedKey =
+      'sequencer_quick_tutorial_completed';
+  static const String quickTutorialSavedStepKey =
+      'sequencer_quick_tutorial_saved_step';
+  static const String tutorialPromptDeclinedKey =
+      'sequencer_tutorial_prompt_declined';
   static const int tutorialTotalSteps = 24;
   static const int minRecordingSecondsForTutorialAdvance = 4;
   static const Duration recordingStepStopPromptDelay = Duration(seconds: 3);
   static const double selectModeVolumeDeltaThreshold = 0.10;
   static const double tutorialCellTargetVolume = 0.8;
   static const int tutorialCellTargetPitchClassDSharp = 3;
-  static const Duration tutorialCellParamsAdvanceDelay =
-      Duration(seconds: 1);
-  static const Duration tutorialJumpValueTwoToPasteDelay =
-      Duration(seconds: 1);
+  static const Duration tutorialCellParamsAdvanceDelay = Duration(seconds: 1);
+  static const Duration tutorialJumpValueTwoToPasteDelay = Duration(seconds: 1);
 
   bool _isInitialized = false;
   bool _isFirstLaunchSession = false;
   bool _showTutorialPromptThisSession = false;
+  bool _tutorialPromptDeclinedEver = false;
+  bool _forceProjectsCreatePatternFabHighlight = false;
+  bool _autoStartTutorialOnNextProjectCreate = false;
+
+  /// Loaded from prefs: step to restore when user confirms "Proceed with tutorial?".
+  TutorialStep? _savedStepToResume;
+
+  /// True when the entry dialog is the resume flow (not first-install "Run tutorial?").
+  bool _tutorialEntryPromptIsResume = false;
   TutorialStep _activeTutorialStep = TutorialStep.none;
   bool _copyActionDone = false;
   bool _cellVolumeAdjusted = false;
@@ -136,6 +161,10 @@ class TutorialService extends ChangeNotifier {
   bool _secondTakeCloseDone = false;
   bool _libraryLatestRecordingOpened = false;
   bool _libraryLatestRecordingShared = false;
+  bool _projectsCreatePatternFabHintDismissed = false;
+
+  /// Section-two-steps tutorial: user raised steps to ≥32; next they must lower to 8.
+  bool _sectionTwoStepsReachedThirtyTwo = false;
 
   // Default inset config (matches the previously hardcoded values in
   // sequencer_screen_v2.dart).
@@ -163,17 +192,32 @@ class TutorialService extends ChangeNotifier {
   static const TutorialTextInsets _takesTextInsets = _defaultTextInsets;
   static const TutorialTextInsets _layersTextInsets = _defaultTextInsets;
   static const TutorialTextInsets _sectionsSwipeTextInsets = _defaultTextInsets;
-  static const TutorialTextInsets _sectionTwoStepsTextInsets = _defaultTextInsets;
-  static const TutorialTextInsets _sectionTwoSamplesTextInsets = _defaultTextInsets;
-  static const TutorialTextInsets _sectionsNavigateTextInsets = _defaultTextInsets;
+  static const TutorialTextInsets _sectionTwoStepsTextInsets =
+      _defaultTextInsets;
+
+  /// Step 15: bottom-anchored card; extra bottom inset + tighter max height keeps copy on-screen.
+  static const TutorialTextInsets _sectionTwoSamplesTextInsets =
+      TutorialTextInsets(
+    left: 0.08,
+    right: 0.08,
+    top: 0.02,
+    bottom: 0.12,
+    maxCardHeightFraction: 0.36,
+    cardPaddingHorizontal: 20,
+    cardPaddingVertical: 12,
+  );
+  static const TutorialTextInsets _sectionsNavigateTextInsets =
+      _defaultTextInsets;
   static const TutorialTextInsets _sectionsMenuTextInsets = _defaultTextInsets;
   static const TutorialTextInsets _songModeTextInsets = _defaultTextInsets;
   static const TutorialTextInsets _sectionLoopsTextInsets = _defaultTextInsets;
   static const TutorialTextInsets _songRecordingTextInsets = _defaultTextInsets;
   static const TutorialTextInsets _secondTakeAddTextInsets = _defaultTextInsets;
-  static const TutorialTextInsets _secondTakeCloseTextInsets = _defaultTextInsets;
+  static const TutorialTextInsets _secondTakeCloseTextInsets =
+      _defaultTextInsets;
   static const TutorialTextInsets _backToPatternTextInsets = _defaultTextInsets;
-  static const TutorialTextInsets _projectsLibraryTextInsets = _defaultTextInsets;
+  static const TutorialTextInsets _projectsLibraryTextInsets =
+      _defaultTextInsets;
   static const TutorialTextInsets _libraryLatestRecordingTextInsets =
       _defaultTextInsets;
 
@@ -251,10 +295,13 @@ class TutorialService extends ChangeNotifier {
   final GlobalKey undoButtonTutorialKey = GlobalKey();
   final GlobalKey redoButtonTutorialKey = GlobalKey();
   final GlobalKey jumpButtonTutorialKey = GlobalKey();
+
   /// The numeric Jump value on the JUMP button (e.g. "2") for tutorial anchoring.
   final GlobalKey jumpValueTwoDisplayTutorialKey = GlobalKey();
+
   /// Cell to copy from: prefers 0:0 if it has a sample, else first occupied cell.
   final GlobalKey jumpPasteSourceCellTutorialKey = GlobalKey();
+
   /// Paste destination for first paste after copy (row 2, col 0; third line, first column).
   final GlobalKey jumpPasteTargetCellTutorialKey = GlobalKey();
   final GlobalKey playButtonTutorialKey = GlobalKey();
@@ -267,6 +314,7 @@ class TutorialService extends ChangeNotifier {
   final GlobalKey layersRowTutorialKey = GlobalKey();
   final GlobalKey selectModeButtonTutorialKey = GlobalKey();
   final GlobalKey sampleGridTutorialKey = GlobalKey();
+
   /// "Create new section" primary action on [SectionCreationOverlay] (sections swipe step).
   final GlobalKey sectionCreatePrimaryButtonTutorialKey = GlobalKey();
   final GlobalKey sectionMenuButtonTutorialKey = GlobalKey();
@@ -282,8 +330,19 @@ class TutorialService extends ChangeNotifier {
   bool get isInitialized => _isInitialized;
   bool get isFirstLaunchSession => _isFirstLaunchSession;
   bool get showTutorialPromptThisSession => _showTutorialPromptThisSession;
+  bool get showRunTutorialButtonOnProjectsSettings =>
+      isEnabled && (!_isFirstLaunchSession || _tutorialPromptDeclinedEver);
+  bool get tutorialEntryPromptIsResume => _tutorialEntryPromptIsResume;
   TutorialStep get activeTutorialStep => _activeTutorialStep;
   bool get isTutorialRunning => _activeTutorialStep != TutorialStep.none;
+
+  /// Pulse the "+" on [ProjectsScreen] once per first-install session until tapped or dismissed.
+  bool get showProjectsCreatePatternFabHighlight =>
+      isEnabled &&
+      (_isFirstLaunchSession || _forceProjectsCreatePatternFabHighlight) &&
+      _activeTutorialStep == TutorialStep.none &&
+      !_projectsCreatePatternFabHintDismissed;
+
   bool get showCellParamsVolumePointer =>
       _activeTutorialStep == TutorialStep.sequencerCellParamsHint &&
       !_cellVolumeAdjusted;
@@ -292,6 +351,11 @@ class TutorialService extends ChangeNotifier {
       _cellVolumeAdjusted &&
       !_cellPitchAdjusted;
   bool get showCopyPointer =>
+      _activeTutorialStep == TutorialStep.sequencerCopyPasteHint &&
+      !_copyActionDone;
+
+  /// Grid cell (1,1) — first step/column — is the copy source; spotlight it until Copy is used.
+  bool get showCopyPasteSourceCellHighlight =>
       _activeTutorialStep == TutorialStep.sequencerCopyPasteHint &&
       !_copyActionDone;
   bool get showPastePointer =>
@@ -308,12 +372,14 @@ class TutorialService extends ChangeNotifier {
       _jumpValueSetToTwo &&
       _jumpValueCopyDone &&
       _jumpValuePasteCount < 3;
+
   /// First paste after copy: highlight cell row 2 col 0 and Paste.
   bool get showJumpPasteTargetCellPointer =>
       _activeTutorialStep == TutorialStep.sequencerJumpPasteHint &&
       _jumpValueSetToTwo &&
       _jumpValueCopyDone &&
       _jumpValuePasteCount == 0;
+
   /// Pastes 2–3: highlight Paste only.
   bool get showJumpPasteButtonOnlyPointer =>
       _activeTutorialStep == TutorialStep.sequencerJumpPasteHint &&
@@ -328,6 +394,33 @@ class TutorialService extends ChangeNotifier {
       _activeTutorialStep == TutorialStep.sequencerRecordingHint &&
       _recordingPressed &&
       !_recordingReadyToStop;
+
+  int get recordingStepPartIndex {
+    if (_activeTutorialStep != TutorialStep.sequencerRecordingHint) return 0;
+    if (_recordingStoppedAfterFourSec) return 4;
+    if (!_recordingPressed) return 1;
+    if (!_recordingReadyToStop) return 2;
+    return 3;
+  }
+
+  String get recordingStepInstruction {
+    if (_activeTutorialStep != TutorialStep.sequencerRecordingHint) {
+      return 'Recording';
+    }
+    switch (recordingStepPartIndex) {
+      case 1:
+        return 'Press Record button';
+      case 2:
+        return 'Press Play button';
+      case 3:
+        return 'Press Record button again to stop recording';
+      case 4:
+        return 'Hang on while your take is saved…';
+      default:
+        return 'Recording';
+    }
+  }
+
   /// Song-mode recording: point at Record only until Record is pressed; then Play/Stop.
   bool get showSongRecordingRecordPointer =>
       _activeTutorialStep == TutorialStep.sequencerSongRecordingHint &&
@@ -462,39 +555,137 @@ class TutorialService extends ChangeNotifier {
     if (!isEnabled) {
       _isFirstLaunchSession = false;
       _showTutorialPromptThisSession = false;
+      _tutorialPromptDeclinedEver = false;
+      _forceProjectsCreatePatternFabHighlight = false;
+      _savedStepToResume = null;
+      _tutorialEntryPromptIsResume = false;
       _activeTutorialStep = TutorialStep.none;
       _isInitialized = true;
       notifyListeners();
       return;
     }
 
-    final hasLaunchedBefore = await ReliableStorage.getBool(
+    _savedStepToResume = null;
+    _tutorialEntryPromptIsResume = false;
+
+    final tutorialCompleted = await TutorialPrefsService.getBool(
+      quickTutorialCompletedKey,
+      defaultValue: false,
+    );
+    _tutorialPromptDeclinedEver = await TutorialPrefsService.getBool(
+      tutorialPromptDeclinedKey,
+      defaultValue: false,
+    );
+
+    final hasLaunchedBefore = await TutorialPrefsService.getBool(
       hasLaunchedBeforeKey,
       defaultValue: false,
     );
 
     _isFirstLaunchSession = !hasLaunchedBefore;
-    _showTutorialPromptThisSession = !hasLaunchedBefore;
 
     if (!hasLaunchedBefore) {
-      await ReliableStorage.setBool(hasLaunchedBeforeKey, true);
+      await TutorialPrefsService.setBool(hasLaunchedBeforeKey, true);
+      _showTutorialPromptThisSession = true;
+    } else {
+      _showTutorialPromptThisSession = false;
+      if (!tutorialCompleted) {
+        final savedName = await TutorialPrefsService.getString(
+          quickTutorialSavedStepKey,
+          defaultValue: '',
+        );
+        final parsed = _parseSavedTutorialStep(savedName);
+        if (parsed != null) {
+          _savedStepToResume = parsed;
+          _showTutorialPromptThisSession = true;
+          _tutorialEntryPromptIsResume = true;
+        }
+      }
     }
 
     _isInitialized = true;
     notifyListeners();
   }
 
+  static TutorialStep? _parseSavedTutorialStep(String name) {
+    if (name.isEmpty) return null;
+    for (final v in TutorialStep.values) {
+      if (v.name == name && v != TutorialStep.none) {
+        return v;
+      }
+    }
+    return null;
+  }
+
+  void _schedulePersistTutorialProgress(TutorialStep step) {
+    if (!isEnabled || step == TutorialStep.none) return;
+    TutorialPrefsService.setString(quickTutorialSavedStepKey, step.name);
+    TutorialPrefsService.setBool(quickTutorialCompletedKey, false);
+  }
+
+  Future<void> _persistTutorialFullyCompleted() async {
+    if (!isEnabled) return;
+    await TutorialPrefsService.setBool(quickTutorialCompletedKey, true);
+    await TutorialPrefsService.setString(quickTutorialSavedStepKey, '');
+  }
+
   void dismissTutorialPromptForSession() {
     if (!isEnabled) return;
     if (!_showTutorialPromptThisSession) return;
     _showTutorialPromptThisSession = false;
+    _tutorialPromptDeclinedEver = true;
+    unawaited(
+      TutorialPrefsService.setBool(tutorialPromptDeclinedKey, true),
+    );
     notifyListeners();
+  }
+
+  void dismissProjectsCreatePatternFabHint() {
+    if (!isEnabled) return;
+    if (_projectsCreatePatternFabHintDismissed) return;
+    _projectsCreatePatternFabHintDismissed = true;
+    _forceProjectsCreatePatternFabHighlight = false;
+    notifyListeners();
+  }
+
+  void requestRunTutorialFromProjects() {
+    if (!isEnabled) return;
+    _showTutorialPromptThisSession = true;
+    _tutorialEntryPromptIsResume = false;
+    _savedStepToResume = null;
+    _forceProjectsCreatePatternFabHighlight = true;
+    _projectsCreatePatternFabHintDismissed = false;
+    _autoStartTutorialOnNextProjectCreate = true;
+    notifyListeners();
+  }
+
+  bool consumeAutoStartTutorialOnProjectCreate() {
+    if (!isEnabled || !_autoStartTutorialOnNextProjectCreate) return false;
+    _autoStartTutorialOnNextProjectCreate = false;
+    startSequencerQuickTutorial();
+    return true;
   }
 
   void startSequencerQuickTutorial() {
     if (!isEnabled) return;
     _showTutorialPromptThisSession = false;
+    _tutorialEntryPromptIsResume = false;
+    _savedStepToResume = null;
+    _autoStartTutorialOnNextProjectCreate = false;
+    dismissProjectsCreatePatternFabHint();
     _setActiveStep(TutorialStep.sequencerFirstCellHint);
+  }
+
+  void resumeSequencerQuickTutorial() {
+    if (!isEnabled) return;
+    final step = _savedStepToResume;
+    if (step == null) return;
+    _showTutorialPromptThisSession = false;
+    _tutorialEntryPromptIsResume = false;
+    _savedStepToResume = null;
+    _autoStartTutorialOnNextProjectCreate = false;
+    dismissProjectsCreatePatternFabHint();
+    _setActiveStep(step);
   }
 
   void advanceTutorialToSelectSample() {
@@ -601,8 +792,7 @@ class TutorialService extends ChangeNotifier {
         return;
       }
       _jumpValueTwoAdvanceTimer?.cancel();
-      _jumpValueTwoAdvanceTimer =
-          Timer(tutorialJumpValueTwoToPasteDelay, () {
+      _jumpValueTwoAdvanceTimer = Timer(tutorialJumpValueTwoToPasteDelay, () {
         _jumpValueTwoAdvanceTimer = null;
         if (_activeTutorialStep != TutorialStep.sequencerJumpValueTwoHint) {
           return;
@@ -855,7 +1045,8 @@ class TutorialService extends ChangeNotifier {
       !_libraryLatestRecordingShared;
 
   String get libraryLatestRecordingStepInstruction {
-    if (_activeTutorialStep != TutorialStep.sequencerLibraryLatestRecordingHint) {
+    if (_activeTutorialStep !=
+        TutorialStep.sequencerLibraryLatestRecordingHint) {
       return 'Library overview';
     }
     if (!_libraryLatestRecordingOpened) {
@@ -925,7 +1116,9 @@ class TutorialService extends ChangeNotifier {
   void verifyDisableSelectModeStep() {
     if (!isEnabled) return;
     if (_activeTutorialStep != TutorialStep.sequencerSelectModeHint) return;
-    if (!_selectModeEntered || !_multiSelectDone || !_selectModeVolumeAdjusted) {
+    if (!_selectModeEntered ||
+        !_multiSelectDone ||
+        !_selectModeVolumeAdjusted) {
       return;
     }
     _setActiveStep(TutorialStep.sequencerRecordingHint);
@@ -938,12 +1131,47 @@ class TutorialService extends ChangeNotifier {
     _setActiveStep(TutorialStep.sequencerSectionTwoStepsHint);
   }
 
-  void verifySectionTwoStepsSetToThirtyTwoStep() {
-    if (!isEnabled) return;
+  bool get showSectionTwoStepsIncreasePointer =>
+      _activeTutorialStep == TutorialStep.sequencerSectionTwoStepsHint &&
+      !_sectionTwoStepsReachedThirtyTwo;
+  bool get showSectionTwoStepsDecreasePointer =>
+      _activeTutorialStep == TutorialStep.sequencerSectionTwoStepsHint &&
+      _sectionTwoStepsReachedThirtyTwo;
+
+  int get sectionTwoStepsHintPartIndex {
     if (_activeTutorialStep != TutorialStep.sequencerSectionTwoStepsHint) {
-      return;
+      return 0;
     }
-    _setActiveStep(TutorialStep.sequencerSectionTwoSamplesHint);
+    return _sectionTwoStepsReachedThirtyTwo ? 2 : 1;
+  }
+
+  String get sectionTwoStepsHintInstruction {
+    if (_activeTutorialStep != TutorialStep.sequencerSectionTwoStepsHint) {
+      return 'Section 2 steps';
+    }
+    if (!_sectionTwoStepsReachedThirtyTwo) {
+      return 'Scroll down and use + (plus) to increase the step count of section 2 to 32.';
+    }
+    return 'Use − (minus) to reduce the step count of section 2 to 8.';
+  }
+
+  /// Call when pattern state updates during [TutorialStep.sequencerSectionTwoStepsHint] (section index 1 = second section).
+  void syncSectionTwoStepsHint({
+    required int sectionIndex,
+    required int stepCount,
+    required int sectionsCount,
+  }) {
+    if (!isEnabled) return;
+    if (_activeTutorialStep != TutorialStep.sequencerSectionTwoStepsHint)
+      return;
+    if (sectionsCount <= 1 || sectionIndex != 1) return;
+    if (!_sectionTwoStepsReachedThirtyTwo && stepCount >= 32) {
+      _sectionTwoStepsReachedThirtyTwo = true;
+      notifyListeners();
+    }
+    if (_sectionTwoStepsReachedThirtyTwo && stepCount == 8) {
+      _setActiveStep(TutorialStep.sequencerSectionTwoSamplesHint);
+    }
   }
 
   void verifySectionTwoFiveSamplesStep() {
@@ -1039,13 +1267,15 @@ class TutorialService extends ChangeNotifier {
 
   void markProjectsLibraryFolderOpenAction() {
     if (!isEnabled) return;
-    if (_activeTutorialStep != TutorialStep.sequencerProjectsLibraryHint) return;
+    if (_activeTutorialStep != TutorialStep.sequencerProjectsLibraryHint)
+      return;
     _setActiveStep(TutorialStep.sequencerLibraryLatestRecordingHint);
   }
 
   void markLibraryLatestRecordingOpenAction() {
     if (!isEnabled) return;
-    if (_activeTutorialStep != TutorialStep.sequencerLibraryLatestRecordingHint) {
+    if (_activeTutorialStep !=
+        TutorialStep.sequencerLibraryLatestRecordingHint) {
       return;
     }
     if (_libraryLatestRecordingOpened) return;
@@ -1055,11 +1285,13 @@ class TutorialService extends ChangeNotifier {
 
   void markLibraryLatestRecordingShareAction() {
     if (!isEnabled) return;
-    if (_activeTutorialStep != TutorialStep.sequencerLibraryLatestRecordingHint) {
+    if (_activeTutorialStep !=
+        TutorialStep.sequencerLibraryLatestRecordingHint) {
       return;
     }
     if (!_libraryLatestRecordingOpened || _libraryLatestRecordingShared) return;
     _libraryLatestRecordingShared = true;
+    unawaited(_persistTutorialFullyCompleted());
     notifyListeners();
   }
 
@@ -1155,6 +1387,7 @@ class TutorialService extends ChangeNotifier {
       case TutorialStep.sequencerFirstCellHint:
         _activeTutorialStep = TutorialStep.none;
         _showTutorialPromptThisSession = true;
+        _tutorialEntryPromptIsResume = false;
         notifyListeners();
         break;
       case TutorialStep.sequencerSelectSampleHint:
@@ -1295,6 +1528,10 @@ class TutorialService extends ChangeNotifier {
     _secondTakeCloseDone = false;
     _libraryLatestRecordingOpened = false;
     _libraryLatestRecordingShared = false;
+    _sectionTwoStepsReachedThirtyTwo = false;
+    if (step != TutorialStep.none) {
+      _schedulePersistTutorialProgress(step);
+    }
     notifyListeners();
   }
 

@@ -14,16 +14,19 @@ import '../utils/pattern_name_generator.dart';
 import 'sequencer_screen.dart';
 import '../widgets/simplified_header_widget.dart';
 import '../widgets/pattern_preview_widget.dart';
+import '../widgets/tutorial_pulse_widget.dart';
 import '../ffi/table_bindings.dart';
 import '../ffi/playback_bindings.dart';
 import '../ffi/sample_bank_bindings.dart';
 import '../state/sequencer/table.dart';
 import '../state/app_state.dart';
 import '../services/cache/working_state_cache_service.dart';
+import '../services/local_checkpoint_service.dart';
+import 'projects_settings_screen.dart';
 
 class ProjectsScreen extends StatefulWidget {
   const ProjectsScreen({Key? key}) : super(key: key);
-  
+
   @override
   State<ProjectsScreen> createState() => _ProjectsScreenState();
 }
@@ -33,8 +36,9 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
   bool _isOpeningProject = false;
   final Set<String> _deletingPatternIds = {}; // Prevent double deletion
   Timer? _timestampUpdateTimer; // Periodic timer to update relative timestamps
-  final ValueNotifier<int> _timestampTick = ValueNotifier<int>(0); // Tick counter for timestamp updates
-  
+  final ValueNotifier<int> _timestampTick =
+      ValueNotifier<int>(0); // Tick counter for timestamp updates
+
   // Cache snapshot Futures to prevent recreation on rebuilds (eliminates flicker)
   final Map<String, Future<Map<String, dynamic>?>> _snapshotFutureCache = {};
 
@@ -43,65 +47,66 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
   // ============================================================================
   // All adjustable layout parameters in one place. Change these to customize appearance.
   // Using 2-column grid layout similar to Google Docs
-  
+
   // ----------------------------------------------------------------------------
   // LIST LAYOUT CONTROL
   // ----------------------------------------------------------------------------
   // Single column layout with horizontal tiles
-  
+
   // Spacing between tiles
-  static const double _tileSpacing = 12.0;  // Vertical gap between tiles
-  static const double _listPadding = 16.0;  // Padding around list
-  
+  static const double _tileSpacing = 12.0; // Vertical gap between tiles
+  static const double _listPadding = 16.0; // Padding around list
+
   // ----------------------------------------------------------------------------
   // TILE DIMENSIONS CONTROL
   // ----------------------------------------------------------------------------
   // Fixed tile height (in logical pixels)
   // Recommended: 120-180px for comfortable viewing
   static const double _tileHeight = 180.0;
-  
+
   // ----------------------------------------------------------------------------
   // TILE BACKGROUND COLOR
   // ----------------------------------------------------------------------------
   // Controls the background color of the entire project tile
   static const Color _tileBackgroundColor = AppColors.sequencerSurfaceRaised;
-  static const double _tileBorderRadius = 1.0;  // Rounded corners to match sequencer
+  static const double _tileBorderRadius =
+      1.0; // Rounded corners to match sequencer
   static const double _tileElevation = 2.0;
-  
+
   // ----------------------------------------------------------------------------
   // OVERLAY CONTROLS (Metadata only - participants removed)
   // ----------------------------------------------------------------------------
   // Background overlay color (color of the overlay backgrounds)
   static const Color _overlayBackgroundColor = AppColors.sequencerSurfaceBase;
-  
+
   // Background overlay opacity (0.0 = fully transparent, 1.0 = fully opaque)
   static const double _overlayBackgroundOpacity = 0.95;
-  
+
   // Text color (color of the text on overlays)
   static const Color _overlayTextColor = AppColors.sequencerText;
-  
+
   // Text opacity (0.0 = fully transparent, 1.0 = fully opaque)
   static const double _overlayTextOpacity = 1.0;
-  
+
   // Text font weight (w100-w900, or use FontWeight.normal, FontWeight.bold, etc.)
   static const FontWeight _overlayTextFontWeight = FontWeight.w700;
-  
+
   // Font family for overlay text (use GoogleFonts method name)
   static const String _overlayFontFamily = 'CrimsonPro';
-  
+
   // Corner radius for overlays (0.0 = squared corners)
   static const double _overlayCornerRadius = 4.0;
-  
+
   // Extension space around text (how much the background extends beyond text)
   static const double _overlayHorizontalExtension = 14.0;
   static const double _overlayVerticalExtension = 2.0;
-  
+
   // Metadata overlay (top left) - shows LEN, STP, HST
   static const double _metadataOverlayHorizontalOffset = 5.0;
   static const double _metadataOverlayVerticalOffset = 5.0;
   static const double _metadataOverlayLabelFontSize = 12.0;
   static const double _metadataOverlayNumberFontSize = 15.0;
-  
+
   // Footer section (bottom of tile - shows created/modified dates)
   static const bool _showFooter = true;
   static const double _footerHeight = 20.0;
@@ -113,28 +118,45 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
   static const Color _footerTextColor = AppColors.sequencerLightText;
   static const double _footerTextOpacity = 1.0;
   static const double _footerLabelOpacity = 0.7;
-  
+
   // Font family for footer text
   static const String _footerFontFamily = 'sourceSans3';
-  
+
   // Gradient edge fade controls
   static const double _overlayHorizontalFadeWidth = 0.01;
   static const double _overlayVerticalFadeHeight = 0.5;
-  
+
   // ----------------------------------------------------------------------------
   // CREATE NEW PATTERN BUTTON (FAB) CONTROLS
   // ----------------------------------------------------------------------------
   static const double _fabCornerRadius = 11.0;
   static const Color _fabBackgroundColor = Color.fromARGB(255, 66, 66, 66);
   static Color _fabIconColor = Color.fromARGB(255, 185, 185, 185);
-  static const double _fabElevation = 4.0;
   static const double _fabIconSize = 50.0;
   static const double _fabSize = 56.0;
   static const double _fabBottomOffset = 30.0;
   static const double _fabRightOffset = 30.0;
 
+  // FAB border & shadow
+  static const Color _fabBorderColor = Color.fromARGB(180, 140, 140, 140);
+  static const double _fabBorderWidth = 1.5;
+  static const List<BoxShadow> _fabBoxShadows = [
+    BoxShadow(
+      color: Color.fromARGB(140, 0, 0, 0),
+      blurRadius: 14,
+      offset: Offset(0, 5),
+      spreadRadius: 2,
+    ),
+    BoxShadow(
+      color: Color.fromARGB(60, 0, 0, 0),
+      blurRadius: 4,
+      offset: Offset(0, 1),
+    ),
+  ];
+
   // Helper method to get font family based on font family string
-  static TextStyle _getFontStyle(String fontFamily, {
+  static TextStyle _getFontStyle(
+    String fontFamily, {
     Color? color,
     double? fontSize,
     FontWeight? fontWeight,
@@ -206,11 +228,11 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
     // Always show most recently modified patterns first
     final patterns = [...patternsState.patterns]
       ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
-    
+
     if (patterns.isEmpty) {
       return const SizedBox.shrink(); // Show nothing when no patterns
     }
-    
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -227,13 +249,14 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
             ),
           ),
         ),
-        
+
         // Patterns list (single column)
         Expanded(
           child: ListView.separated(
             padding: EdgeInsets.all(_listPadding),
             itemCount: patterns.length,
-            separatorBuilder: (context, index) => SizedBox(height: _tileSpacing),
+            separatorBuilder: (context, index) =>
+                SizedBox(height: _tileSpacing),
             itemBuilder: (context, index) {
               return _buildProjectCard(patterns[index]);
             },
@@ -254,14 +277,14 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
         statusBarBrightness: Brightness.light,
       ),
     );
-    
+
     // Start periodic timer to update relative timestamps
     _timestampUpdateTimer = Timer.periodic(const Duration(seconds: 10), (_) {
       if (mounted) {
         _timestampTick.value++;
       }
     });
-    
+
     // Stop any playing audio when ProjectsScreen becomes visible
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
@@ -276,7 +299,7 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
   void dispose() {
     _timestampUpdateTimer?.cancel();
     _timestampTick.dispose();
-    
+
     SystemChrome.setSystemUIOverlayStyle(
       const SystemUiOverlayStyle(
         statusBarColor: Colors.transparent,
@@ -290,13 +313,13 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
   Future<void> _loadProjects() async {
     try {
       final patternsState = Provider.of<PatternsState>(context, listen: false);
-      
+
       // Clear snapshot cache to force reload of working states
       _snapshotFutureCache.clear();
-      
+
       // Load patterns
       await patternsState.loadPatterns();
-      
+
       setState(() {
         _error = null;
       });
@@ -307,6 +330,15 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
     }
   }
 
+  Future<void> _openProjectsSettings() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => const ProjectsSettingsScreen(),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final appState = context.watch<AppState>();
@@ -315,70 +347,77 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
       body: Stack(
         children: [
           SafeArea(
-        child: Column(
-          children: [
-            // Simplified header with library icon
-            const SimplifiedHeaderWidget(),
-            
+            child: Column(
+              children: [
+                // Simplified header with library icon
+                SimplifiedHeaderWidget(
+                  onLogoTap: _openProjectsSettings,
+                ),
+
                 Consumer<PatternsState>(
                   builder: (context, patternsState, _) {
                     // Show loading only on first load
                     if (patternsState.isLoading && !patternsState.hasLoaded) {
-                  return Expanded(
-                    child: Center(
-                      child: CircularProgressIndicator(color: AppColors.sequencerAccent),
-                    ),
-                  );
-                }
-                
-                return Expanded(
+                      return Expanded(
+                        child: Center(
+                          child: CircularProgressIndicator(
+                              color: AppColors.sequencerAccent),
+                        ),
+                      );
+                    }
+
+                    return Expanded(
                       child: _error != null
-                                      ? Center(
-                                          child: Column(
-                                            mainAxisAlignment: MainAxisAlignment.center,
-                                            children: [
-                                              Icon(Icons.error_outline, color: AppColors.sequencerLightText, size: 48),
-                                              const SizedBox(height: 12),
-                                              Text(
-                                                _error!, 
-                                                style: TextStyle(
-                                                  color: AppColors.sequencerText,
-                                                  fontWeight: FontWeight.w500,
-                                                ),
-                                              ),
-                                              const SizedBox(height: 12),
-                                              ElevatedButton(
-                                                onPressed: () {
-                                                  _loadProjects();
-                                                },
-                                                style: ElevatedButton.styleFrom(
-                                                  backgroundColor: AppColors.sequencerAccent,
-                                                ),
-                                                child: Text(
-                                                  'RETRY',
-                                                  style: TextStyle(
-                                                    color: AppColors.sequencerText,
-                                                    fontWeight: FontWeight.bold,
-                                                    letterSpacing: 1.0,
-                                                  ),
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                        )
+                          ? Center(
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(Icons.error_outline,
+                                      color: AppColors.sequencerLightText,
+                                      size: 48),
+                                  const SizedBox(height: 12),
+                                  Text(
+                                    _error!,
+                                    style: TextStyle(
+                                      color: AppColors.sequencerText,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 12),
+                                  ElevatedButton(
+                                    onPressed: () {
+                                      _loadProjects();
+                                    },
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor:
+                                          AppColors.sequencerAccent,
+                                    ),
+                                    child: Text(
+                                      'RETRY',
+                                      style: TextStyle(
+                                        color: AppColors.sequencerText,
+                                        fontWeight: FontWeight.bold,
+                                        letterSpacing: 1.0,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            )
                           : _buildProjectsList(context, patternsState),
-                );
-              },
+                    );
+                  },
+                ),
+              ],
             ),
-          ],
-        ),
-      ),
+          ),
           if (_isOpeningProject)
             Positioned.fill(
               child: Container(
                 color: AppColors.sequencerPageBackground.withOpacity(0.8),
                 child: Center(
-                  child: CircularProgressIndicator(color: AppColors.sequencerAccent),
+                  child: CircularProgressIndicator(
+                      color: AppColors.sequencerAccent),
                 ),
               ),
             ),
@@ -386,68 +425,105 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
           Positioned(
             right: _fabRightOffset,
             bottom: _fabBottomOffset,
-              child: Material(
-              color: _fabBackgroundColor,
-              elevation: _fabElevation,
+            child: TutorialPulseWidget(
+              enabled: appState.showProjectsCreatePatternFabHighlight,
               borderRadius: BorderRadius.circular(_fabCornerRadius),
-              child: InkWell(
-                onTap: () async {
-                  // Stop any playing audio
-                  context.read<AudioPlayerState>().stop();
-                  
-                  // Create a new pattern
-                  final patternsState = context.read<PatternsState>();
-                  final newPattern = await patternsState.createPattern(PatternNameGenerator.generate());
-                  
-                  if (newPattern == null) {
-                    debugPrint('❌ Failed to create new pattern');
-                    return;
-                  }
-                  
-                  // Set as active pattern
-                  await patternsState.setActivePattern(newPattern);
-                  
-                  // Initialize native subsystems
-                  try {
-                    TableBindings().tableInit();
-                    PlaybackBindings().playbackInit();
-                    SampleBankBindings().sampleBankInit();
-                    // Assign random colors for new project
-                    context.read<SampleBankState>().assignRandomProjectColors();
-                    // Reset all layer modes to sequence (fresh start)
-                    context.read<TableState>().resetAllLayerModes();
-                    // Reset to layer 0
-                    context.read<TableState>().setUiSelectedLayer(0);
-                  } catch (e) {
-                    debugPrint('❌ Failed to init native subsystems: $e');
-                  }
-                  
-                  // Navigate to sequencer
-                  await Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) => const PatternScreen(),
-                    ),
-                  );
-                  
-                  // When returning from sequencer, clear cache and reload to show updated working state
-                  _snapshotFutureCache.clear();
-                  await _loadProjects();
-                },
+              child: Container(
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(_fabCornerRadius),
+                  border: Border.all(
+                    color: _fabBorderColor,
+                    width: _fabBorderWidth,
+                  ),
+                  boxShadow: _fabBoxShadows,
+                ),
+                child: Material(
+                color: _fabBackgroundColor,
+                elevation: 0,
                 borderRadius: BorderRadius.circular(_fabCornerRadius),
-                child: Container(
-                  width: _fabSize,
-                  height: _fabSize,
-                  alignment: Alignment.center,
-                  child: Icon(
-                    Icons.add,
-                    size: _fabIconSize,
-                    color: _fabIconColor,
+                child: InkWell(
+                  onTap: () async {
+                    if (_isOpeningProject) return;
+                    if (mounted) {
+                      setState(() {
+                        _isOpeningProject = true;
+                      });
+                    }
+                    final appState = context.read<AppState>();
+                    final autoStartedTutorial =
+                        appState.consumeAutoStartTutorialOnProjectCreate();
+                    if (!autoStartedTutorial) {
+                      appState.dismissProjectsCreatePatternFabHint();
+                    }
+                    try {
+                      // Stop any playing audio
+                      context.read<AudioPlayerState>().stop();
+
+                      // Create a new pattern
+                      final patternsState = context.read<PatternsState>();
+                      final newPattern = await patternsState
+                          .createPattern(PatternNameGenerator.generate());
+
+                      if (newPattern == null) {
+                        debugPrint('❌ Failed to create new pattern');
+                        return;
+                      }
+
+                      // Set as active pattern
+                      await patternsState.setActivePattern(newPattern);
+
+                      // Initialize native subsystems
+                      try {
+                        TableBindings().tableInit();
+                        PlaybackBindings().playbackInit();
+                        SampleBankBindings().sampleBankInit();
+                        // Assign random colors for new project
+                        context
+                            .read<SampleBankState>()
+                            .assignRandomProjectColors();
+                        // Reset all layer modes to sequence (fresh start)
+                        context.read<TableState>().resetAllLayerModes();
+                        // Reset to layer 0
+                        context.read<TableState>().setUiSelectedLayer(0);
+                      } catch (e) {
+                        debugPrint('❌ Failed to init native subsystems: $e');
+                      }
+
+                      // Navigate to sequencer
+                      await Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => const PatternScreen(),
+                        ),
+                      );
+
+                      // When returning from sequencer, clear cache and reload to show updated working state
+                      _snapshotFutureCache.clear();
+                      await _loadProjects();
+                    } finally {
+                      if (mounted) {
+                        setState(() {
+                          _isOpeningProject = false;
+                        });
+                      }
+                    }
+                  },
+                  borderRadius: BorderRadius.circular(_fabCornerRadius),
+                  child: Container(
+                    width: _fabSize,
+                    height: _fabSize,
+                    alignment: Alignment.center,
+                    child: Icon(
+                      Icons.add,
+                      size: _fabIconSize,
+                      color: _fabIconColor,
+                    ),
                   ),
                 ),
               ),
             ),
           ),
+        ),
           if (appState.activeTutorialStep ==
               TutorialStep.sequencerProjectsLibraryHint)
             _buildLibraryFolderCoachMark(appState),
@@ -470,13 +546,15 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
           }
 
           const horizontalInset = 12.0;
-          final cardWidth = (viewport.width * 0.56).clamp(220.0, 320.0).toDouble();
+          final cardWidth =
+              (viewport.width * 0.56).clamp(220.0, 320.0).toDouble();
           final desiredLeft = iconRect.center.dx - cardWidth + 28;
           final maxLeft = max(
             horizontalInset,
             viewport.width - cardWidth - horizontalInset,
           );
-          final cardLeft = desiredLeft.clamp(horizontalInset, maxLeft).toDouble();
+          final cardLeft =
+              desiredLeft.clamp(horizontalInset, maxLeft).toDouble();
           final minTop = MediaQuery.paddingOf(context).top + 6;
           final desiredTop = iconRect.bottom + 10;
           final maxTop = max(minTop, viewport.height - 130);
@@ -507,11 +585,13 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
                 width: cardWidth,
                 child: IgnorePointer(
                   child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 14, vertical: 10),
                     decoration: BoxDecoration(
                       color: AppColors.tutorialTextOverlayColor,
                       borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: AppColors.sequencerBorder, width: 0.8),
+                      border: Border.all(
+                          color: AppColors.sequencerBorder, width: 0.8),
                     ),
                     child: Text(
                       'Navigate to library now.',
@@ -555,10 +635,12 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
 
     final halfW = targetRect.width / 2;
     final halfH = targetRect.height / 2;
-    final scaleX =
-        towardsText.dx.abs() < 0.0001 ? double.infinity : halfW / towardsText.dx.abs();
-    final scaleY =
-        towardsText.dy.abs() < 0.0001 ? double.infinity : halfH / towardsText.dy.abs();
+    final scaleX = towardsText.dx.abs() < 0.0001
+        ? double.infinity
+        : halfW / towardsText.dx.abs();
+    final scaleY = towardsText.dy.abs() < 0.0001
+        ? double.infinity
+        : halfH / towardsText.dy.abs();
     final scale = min(scaleX, scaleY);
     final edgePoint = Offset(
       center.dx + towardsText.dx * scale,
@@ -579,71 +661,74 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
     return RepaintBoundary(
       child: Container(
         key: ValueKey('${pattern.id}_${pattern.checkpointIds.length}'),
-          height: _tileHeight,
-          decoration: BoxDecoration(
+        height: _tileHeight,
+        decoration: BoxDecoration(
           color: _tileBackgroundColor,
-            borderRadius: BorderRadius.circular(_tileBorderRadius),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.3),
-                blurRadius: _tileElevation * 2,
-                offset: Offset(0, _tileElevation),
-              ),
-            ],
-            border: Border.all(
-              color: AppColors.sequencerBorder,
-              width: 0.5,
+          borderRadius: BorderRadius.circular(_tileBorderRadius),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.3),
+              blurRadius: _tileElevation * 2,
+              offset: Offset(0, _tileElevation),
             ),
+          ],
+          border: Border.all(
+            color: AppColors.sequencerBorder,
+            width: 0.5,
           ),
-          child: Material(
-        color: Colors.transparent,
-        borderRadius: BorderRadius.circular(_tileBorderRadius),
-        child: InkWell(
+        ),
+        child: Material(
+          color: Colors.transparent,
+          borderRadius: BorderRadius.circular(_tileBorderRadius),
+          child: InkWell(
             onTap: () => _openProject(pattern),
             onLongPress: () => _showDeleteDialog(pattern),
-          borderRadius: BorderRadius.circular(_tileBorderRadius),
-              child: Column(
-                children: [
-                  // Pattern preview with overlays
-                  Expanded(
-                    child: Stack(
-                      children: [
-                        // Pattern preview fills entire tile
-                        ClipRRect(
-                          borderRadius: BorderRadius.only(
-                            topLeft: Radius.circular(_tileBorderRadius),
-                            topRight: Radius.circular(_tileBorderRadius),
-                            bottomLeft: _showFooter ? Radius.zero : Radius.circular(_tileBorderRadius),
-                            bottomRight: _showFooter ? Radius.zero : Radius.circular(_tileBorderRadius),
-                          ),
-                          child: PatternPreviewWidget(
+            borderRadius: BorderRadius.circular(_tileBorderRadius),
+            child: Column(
+              children: [
+                // Pattern preview with overlays
+                Expanded(
+                  child: Stack(
+                    children: [
+                      // Pattern preview fills entire tile
+                      ClipRRect(
+                        borderRadius: BorderRadius.only(
+                          topLeft: Radius.circular(_tileBorderRadius),
+                          topRight: Radius.circular(_tileBorderRadius),
+                          bottomLeft: _showFooter
+                              ? Radius.zero
+                              : Radius.circular(_tileBorderRadius),
+                          bottomRight: _showFooter
+                              ? Radius.zero
+                              : Radius.circular(_tileBorderRadius),
+                        ),
+                        child: PatternPreviewWidget(
                           key: ValueKey('preview_${pattern.id}'),
                           project: pattern,
-                            getProjectSnapshot: _getProjectSnapshot,
-                            getSampleBankColors: _getSampleBankColors,
-                            fadeOverlayColor: _tileBackgroundColor,
-                            innerPadding: const EdgeInsets.all(6),
+                          getProjectSnapshot: _getProjectSnapshot,
+                          getSampleBankColors: _getSampleBankColors,
+                          fadeOverlayColor: _tileBackgroundColor,
+                          innerPadding: const EdgeInsets.all(6),
                           workingStateVersion: 0, // Not used in offline mode
                         ),
                       ),
-                      
+
                       // Metadata overlay (top left) - shows LEN, STP, HST
                       _buildMetadataOverlay(pattern),
-                      ],
-                    ),
+                    ],
                   ),
-                  
-                  // Footer section (below pattern preview)
-                  if (_showFooter)
-                  _buildFooter(pattern),
-                ],
-              ),
+                ),
+
+                // Footer section (below pattern preview)
+                if (_showFooter) _buildFooter(pattern),
+              ],
             ),
+          ),
         ),
       ),
     );
   }
-  
+
   /// Builds metadata overlay for top left corner
   /// Shows STEPS (total steps) and LENGTH (sections)
   Widget _buildMetadataOverlay(Pattern pattern) {
@@ -656,7 +741,7 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
         return _metadataOverlayNumberFontSize * (4.0 / digitCount);
       }
     }
-    
+
     // Helper to build a metric row with label on left and number on right
     Widget _buildMetricRow(String label, int value) {
       return Row(
@@ -690,20 +775,20 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
         ],
       );
     }
-    
+
     return FutureBuilder<Map<String, dynamic>?>(
       future: _getProjectSnapshot(pattern.id),
       builder: (context, snapshot) {
         int sectionsCount = 0; // LENGTH
         int totalSteps = 0; // STEPS
-        
+
         if (snapshot.hasData && snapshot.data != null) {
           try {
             final source = snapshot.data!['source'] as Map<String, dynamic>?;
             final table = source?['table'] as Map<String, dynamic>?;
             final sections = table?['sections'] as List<dynamic>?;
             sectionsCount = sections?.length ?? 0;
-            
+
             // Calculate total steps across all sections
             if (sections != null) {
               for (var section in sections) {
@@ -718,10 +803,10 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
             totalSteps = 0;
           }
         }
-        
+
         // Position at the corner of the pattern table
         const patternInnerPadding = 6.0;
-        
+
         return Positioned(
           top: patternInnerPadding + _metadataOverlayVerticalOffset,
           right: patternInnerPadding + _metadataOverlayHorizontalOffset,
@@ -759,24 +844,24 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
       },
     );
   }
-  
+
   /// Builds footer section showing created and modified dates
   Widget _buildFooter(Pattern pattern) {
     // Format absolute dates with slashes
     String formatDate(DateTime date) {
       return '${date.year}/${date.month.toString().padLeft(2, '0')}/${date.day.toString().padLeft(2, '0')}';
     }
-    
+
     // Format relative time for recent dates (< 48 hours)
     String formatRelativeTime(DateTime date) {
       final now = DateTime.now();
       final difference = now.difference(date);
-      
+
       // If more than 48 hours, show absolute date
       if (difference.inHours >= 48) {
         return formatDate(date);
       }
-      
+
       // Less than 48 hours - show relative time
       if (difference.inSeconds < 5) {
         return 'just now';
@@ -788,10 +873,11 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
         return '${difference.inHours}h ago';
       }
     }
-    
+
     final createdDate = formatDate(pattern.createdAt);
-    final footerColor = _footerBackgroundColor.withOpacity(_footerBackgroundOpacity);
-    
+    final footerColor =
+        _footerBackgroundColor.withOpacity(_footerBackgroundOpacity);
+
     return Container(
       height: _footerHeight,
       decoration: BoxDecoration(
@@ -851,13 +937,13 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
                   ),
                   const SizedBox(width: 4),
                   Text(
-                        modifiedDateText,
-                        style: _getFontStyle(
-                          _footerFontFamily,
+                    modifiedDateText,
+                    style: _getFontStyle(
+                      _footerFontFamily,
                       color: _footerTextColor.withOpacity(_footerTextOpacity),
-                          fontSize: _footerDateFontSize,
-                          fontWeight: _overlayTextFontWeight,
-                        ),
+                      fontSize: _footerDateFontSize,
+                      fontWeight: _overlayTextFontWeight,
+                    ),
                   ),
                 ],
               );
@@ -867,7 +953,7 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
       ),
     );
   }
-  
+
   /// Builds overlay background with gradient edges
   Widget _buildOverlayBackground() {
     return IgnorePointer(
@@ -883,35 +969,35 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
       ),
     );
   }
-  
+
   /// Extracts sample bank colors from snapshot data
   List<Color> _getSampleBankColors(Map<String, dynamic> snapshotData) {
     final List<Color> colors = [];
-    
+
     try {
       final source = snapshotData['source'] as Map<String, dynamic>?;
       if (source == null) {
         return List.generate(25, (i) => AppColors.sequencerCellEmpty);
       }
-      
+
       final sampleBankData = source['sample_bank'] as Map<String, dynamic>?;
       if (sampleBankData == null) {
         return List.generate(25, (i) => AppColors.sequencerCellEmpty);
       }
-      
+
       final samples = sampleBankData['samples'] as List<dynamic>?;
       if (samples == null) {
         return List.generate(25, (i) => AppColors.sequencerCellEmpty);
       }
-      
+
       // Process first 25 slots (A-Y)
       final slotsToProcess = samples.length.clamp(0, 25);
-      
+
       for (int i = 0; i < slotsToProcess; i++) {
         final sample = samples[i];
         if (sample is Map<String, dynamic>) {
           final hasColor = sample.containsKey('color');
-          
+
           // Preview should stay colorful even if snapshot has inconsistent loaded flags.
           if (hasColor) {
             final rawColor = sample['color'];
@@ -935,7 +1021,7 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
           colors.add(AppColors.sequencerCellEmpty);
         }
       }
-      
+
       // Fill remaining slots
       while (colors.length < 25) {
         colors.add(AppColors.sequencerCellEmpty);
@@ -944,10 +1030,10 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
       debugPrint('❌ [PROJECTS] Error parsing sample bank colors: $e');
       return List.generate(25, (i) => AppColors.sequencerCellEmpty);
     }
-    
+
     return colors;
   }
-  
+
   /// Convert hex color string to Color object
   Color _hexToColor(String hex) {
     final buffer = StringBuffer();
@@ -963,23 +1049,32 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
     return _snapshotFutureCache.putIfAbsent(patternId, () async {
       try {
         // Try to load working state (auto-saved snapshot) first
-        final workingState = await WorkingStateCacheService.loadWorkingState(patternId);
+        final workingState =
+            await WorkingStateCacheService.loadWorkingState(patternId);
         if (workingState != null) {
-          debugPrint('📸 [PROJECTS] Loaded working state for pattern preview: $patternId');
+          debugPrint(
+              '📸 [PROJECTS] Loaded working state for pattern preview: $patternId');
           return workingState;
         }
-        
-        // TODO: If no working state, try to load latest checkpoint
-        // For now, return empty snapshot
-        debugPrint('📸 [PROJECTS] No working state found, using empty snapshot for: $patternId');
-          return _createEmptySnapshot();
-        } catch (e) {
+
+        final checkpoints =
+            await LocalCheckpointService.loadCheckpoints(patternId);
+        if (checkpoints.isNotEmpty) {
+          debugPrint(
+              '📸 [PROJECTS] Using latest checkpoint for pattern preview: $patternId');
+          return checkpoints.first.snapshot;
+        }
+
+        debugPrint(
+            '📸 [PROJECTS] No working state or checkpoint; empty preview for: $patternId');
+        return _createEmptySnapshot();
+      } catch (e) {
         debugPrint('❌ [PROJECTS] Error loading snapshot for $patternId: $e');
         return _createEmptySnapshot();
       }
     });
   }
-  
+
   /// Creates an empty snapshot structure for patterns with no checkpoints
   Map<String, dynamic> _createEmptySnapshot() {
     return {
@@ -1005,13 +1100,15 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
         },
         'sample_bank': {
           'max_slots': 26,
-          'samples': List.generate(26, (i) => {
-            'loaded': false,
-            'settings': {
-              'volume': 1.0,
-              'pitch': 1.0,
-            },
-          }),
+          'samples': List.generate(
+              26,
+              (i) => {
+                    'loaded': false,
+                    'settings': {
+                      'volume': 1.0,
+                      'pitch': 1.0,
+                    },
+                  }),
         },
       },
     };
@@ -1031,15 +1128,16 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
 
       // Stop any playing audio
       context.read<AudioPlayerState>().stop();
-      
+
       // Reset layer modes and selection (fresh start for each pattern)
       context.read<TableState>().resetAllLayerModes();
       context.read<TableState>().setUiSelectedLayer(0);
 
       // Keep a stable fallback snapshot in case working-state import is invalid.
       final checkpoints = patternsState.getCheckpoints(pattern.id);
-      final fallbackSnapshot = checkpoints.isNotEmpty ? checkpoints.first.snapshot : null;
-      
+      final fallbackSnapshot =
+          checkpoints.isNotEmpty ? checkpoints.first.snapshot : null;
+
       // Initialize native systems
       try {
         TableBindings().tableInit();
@@ -1051,16 +1149,14 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
 
       // Navigate to sequencer
       if (mounted) {
-        setState(() {
-          _isOpeningProject = false;
-        });
         await Navigator.push(
           context,
           MaterialPageRoute(
-            builder: (context) => PatternScreen(initialSnapshot: fallbackSnapshot),
+            builder: (context) =>
+                PatternScreen(initialSnapshot: fallbackSnapshot),
           ),
         );
-        
+
         // When returning from sequencer, clear cache and reload to show updated working state
         _snapshotFutureCache.clear();
         await _loadProjects();
@@ -1135,12 +1231,12 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
     if (_deletingPatternIds.contains(pattern.id)) {
       return;
     }
-    
+
     final patternsState = context.read<PatternsState>();
-    
+
     try {
       _deletingPatternIds.add(pattern.id);
-      
+
       // Show loading indicator
       if (mounted) {
         setState(() {
@@ -1158,7 +1254,7 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
       }
     } catch (e) {
       debugPrint('❌ Failed to delete pattern: $e');
-      
+
       if (mounted) {
         setState(() {
           _isOpeningProject = false;
@@ -1193,15 +1289,16 @@ class _OverlayGradientPainter extends CustomPainter {
     final rect = Rect.fromLTWH(0, 0, size.width, size.height);
     final paint = Paint();
     paint.shader = _createCombinedGradientShader(rect);
-    
+
     if (cornerRadius > 0) {
-      final rrect = RRect.fromRectAndRadius(rect, Radius.circular(cornerRadius));
+      final rrect =
+          RRect.fromRectAndRadius(rect, Radius.circular(cornerRadius));
       canvas.drawRRect(rrect, paint);
     } else {
       canvas.drawRect(rect, paint);
     }
   }
-  
+
   Shader _createCombinedGradientShader(Rect rect) {
     if (horizontalFade <= 0 && verticalFade <= 0) {
       return LinearGradient(
@@ -1211,21 +1308,21 @@ class _OverlayGradientPainter extends CustomPainter {
         ],
       ).createShader(rect);
     }
-    
+
     final stops = <double>[
       0.0,
       horizontalFade > 0 ? horizontalFade : 0.0,
       horizontalFade > 0 ? 1.0 - horizontalFade : 1.0,
       1.0,
     ];
-    
+
     final colors = <Color>[
       backgroundColor.withOpacity(0.0),
       backgroundColor.withOpacity(opacity),
       backgroundColor.withOpacity(opacity),
       backgroundColor.withOpacity(0.0),
     ];
-    
+
     return LinearGradient(
       begin: Alignment.centerLeft,
       end: Alignment.centerRight,
@@ -1290,4 +1387,3 @@ class _ProjectsTutorialArrowPainter extends CustomPainter {
         oldDelegate.color != color;
   }
 }
-

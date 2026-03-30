@@ -635,8 +635,20 @@ class _LibraryScreenState extends State<LibraryScreen> with TickerProviderStateM
   }
 
   Future<void> _shareLibraryItem(LibraryItem item, BuildContext buttonContext) async {
+    await _shareAudioFile(
+      localPath: item.localPath,
+      title: item.name,
+      buttonContext: buttonContext,
+    );
+  }
+
+  Future<void> _shareAudioFile({
+    required String localPath,
+    required String title,
+    required BuildContext buttonContext,
+  }) async {
     try {
-      final resolved = await LocalAudioPath.resolve(item.localPath);
+      final resolved = await LocalAudioPath.resolve(localPath);
       if (resolved == null) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -658,8 +670,8 @@ class _LibraryScreenState extends State<LibraryScreen> with TickerProviderStateM
       final xFile = XFile(resolved);
       await Share.shareXFiles(
         [xFile],
-        subject: item.name,
-        text: item.name,
+        subject: title,
+        text: title,
         sharePositionOrigin: sharePositionOrigin,
       );
     } catch (e) {
@@ -673,6 +685,117 @@ class _LibraryScreenState extends State<LibraryScreen> with TickerProviderStateM
         );
       }
     }
+  }
+
+  Future<void> _playCustomSample(String filePath) async {
+    try {
+      final resolved = await LocalAudioPath.resolve(filePath);
+      if (resolved == null) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text('Audio file not found'),
+            backgroundColor: Colors.red.shade900,
+            duration: const Duration(seconds: 2),
+          ),
+        );
+        return;
+      }
+      await context.read<AudioPlayerState>().playFromPath(
+            itemId: 'custom:$resolved',
+            localPath: resolved,
+          );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to play file: $e'),
+          backgroundColor: Colors.red.shade900,
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
+  }
+
+  void _showRemoveCustomSampleDialog({
+    required String folderName,
+    required String filePath,
+  }) {
+    final fileName = filePath.split('/').last;
+    showDialog(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          backgroundColor: AppColors.sequencerSurfaceRaised,
+          title: Text(
+            'Delete custom sample',
+            style: TextStyle(
+              color: AppColors.sequencerText,
+              fontSize: 16,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          content: Text(
+            'Delete "$fileName" from "$folderName"?',
+            style: TextStyle(
+              color: AppColors.sequencerLightText,
+              fontSize: 14,
+              fontWeight: FontWeight.w400,
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: Text(
+                'Cancel',
+                style: TextStyle(
+                  color: AppColors.sequencerLightText,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+            TextButton(
+              onPressed: () {
+                Navigator.of(dialogContext).pop();
+                _removeCustomSample(
+                  folderName: folderName,
+                  filePath: filePath,
+                );
+              },
+              child: Text(
+                'Delete',
+                style: TextStyle(
+                  color: AppColors.sequencerAccent,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _removeCustomSample({
+    required String folderName,
+    required String filePath,
+  }) async {
+    final success = await context.read<LibrarySamplesState>().removeCustomFile(
+          folderName: folderName,
+          filePath: filePath,
+        );
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          success ? 'Custom sample deleted' : 'Failed to delete sample',
+        ),
+        backgroundColor: success ? AppColors.sequencerAccent : Colors.red.shade900,
+        duration: const Duration(seconds: 2),
+      ),
+    );
   }
   
   Future<void> _openLinkedPattern(LibraryItem item) async {
@@ -725,11 +848,16 @@ class _LibraryScreenState extends State<LibraryScreen> with TickerProviderStateM
         debugPrint('❌ Failed to init native systems from library: $e');
       }
 
+      final checkpoints = patternsState.getCheckpoints(pattern.id);
+      final fallbackSnapshot =
+          checkpoints.isNotEmpty ? checkpoints.first.snapshot : null;
+
       if (!mounted) return;
       await Navigator.push(
         context,
         MaterialPageRoute(
-          builder: (context) => const PatternScreen(initialSnapshot: null),
+          builder: (context) =>
+              PatternScreen(initialSnapshot: fallbackSnapshot),
         ),
       );
     } catch (e) {
@@ -988,17 +1116,24 @@ class _LibraryScreenState extends State<LibraryScreen> with TickerProviderStateM
     if (files.isEmpty) {
       return _buildEmptySamplesMessage('This custom folder has no imported files.');
     }
+    final folderName = state.currentCustomFolder;
 
     return ListView.builder(
       padding: const EdgeInsets.all(8),
       itemCount: files.length,
       itemBuilder: (context, index) {
         final filePath = files[index];
-        return _buildSampleListItem(
-          title: filePath.split('/').last,
-          subtitle: 'Custom sample',
-          icon: Icons.audio_file,
-          onTap: null,
+        if (folderName == null) {
+          return _buildSampleListItem(
+            title: filePath.split('/').last,
+            subtitle: 'Custom sample',
+            icon: Icons.audio_file,
+            onTap: null,
+          );
+        }
+        return _buildCustomSampleListItem(
+          filePath: filePath,
+          folderName: folderName,
         );
       },
     );
@@ -1056,6 +1191,112 @@ class _LibraryScreenState extends State<LibraryScreen> with TickerProviderStateM
                 ),
                 if (onTap != null)
                   Icon(Icons.chevron_right, color: AppColors.sequencerLightText, size: 18),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCustomSampleListItem({
+    required String filePath,
+    required String folderName,
+  }) {
+    final fileName = filePath.split('/').last;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 6),
+      decoration: BoxDecoration(
+        color: AppColors.sequencerSurfaceRaised,
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: AppColors.sequencerBorder, width: 1),
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () => _playCustomSample(filePath),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            child: Row(
+              children: [
+                Icon(Icons.audio_file, color: AppColors.sequencerAccent, size: 20),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        fileName,
+                        style: TextStyle(
+                          color: AppColors.sequencerText,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        'Custom sample',
+                        style: TextStyle(
+                          color: AppColors.sequencerLightText,
+                          fontSize: 11,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ),
+                ),
+                Builder(
+                  builder: (buttonContext) => IconButton(
+                    icon: Icon(
+                      Icons.share,
+                      color: AppColors.sequencerLightText,
+                      size: 20,
+                    ),
+                    onPressed: () => _shareAudioFile(
+                      localPath: filePath,
+                      title: fileName,
+                      buttonContext: buttonContext,
+                    ),
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(
+                      minWidth: 40,
+                      minHeight: 40,
+                    ),
+                  ),
+                ),
+                PopupMenuButton<String>(
+                  icon: Icon(
+                    Icons.more_vert,
+                    color: AppColors.sequencerLightText,
+                    size: 20,
+                  ),
+                  padding: EdgeInsets.zero,
+                  color: AppColors.sequencerSurfaceRaised,
+                  onSelected: (value) {
+                    if (value == 'delete') {
+                      _showRemoveCustomSampleDialog(
+                        folderName: folderName,
+                        filePath: filePath,
+                      );
+                    }
+                  },
+                  itemBuilder: (context) => [
+                    PopupMenuItem(
+                      value: 'delete',
+                      child: Text(
+                        'Delete',
+                        style: TextStyle(
+                          color: AppColors.sequencerAccent,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ],
             ),
           ),

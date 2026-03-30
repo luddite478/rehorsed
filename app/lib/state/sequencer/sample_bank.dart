@@ -9,6 +9,7 @@ import 'dart:math' as math;
 import '../../ffi/sample_bank_bindings.dart';
 import '../../services/sample_asset_resolver.dart';
 import '../../utils/app_colors.dart';
+import '../library_samples_state.dart';
 import 'ui_selection.dart';
 import 'sync_profiling_helpers.dart';
 
@@ -91,6 +92,9 @@ class SampleBankState extends ChangeNotifier {
 
   /// Load sample into a slot by manifest ID (required).
   Future<bool> loadSample(int slot, String sampleId) async {
+    if (LibrarySamplesState.isCustomSampleId(sampleId)) {
+      return _loadCustomSampleById(slot, sampleId);
+    }
     return _loadSampleByManifestId(slot, sampleId);
   }
 
@@ -235,6 +239,66 @@ class SampleBankState extends ChangeNotifier {
       return await _loadSampleWithId(slot, assetPath, sampleId);
     } catch (e) {
       Log.d('❌ [SAMPLE_BANK_STATE] Failed to load manifest: $e');
+      return false;
+    }
+  }
+
+  Future<bool> _loadCustomSampleById(int slot, String sampleId) async {
+    final customPath =
+        await LibrarySamplesState.resolveCustomSampleIdPath(sampleId);
+    if (customPath == null || customPath.isEmpty) {
+      Log.d('❌ [SAMPLE_BANK_STATE] Custom sample id not found: $sampleId');
+      return false;
+    }
+    return _loadFileWithId(slot, customPath, sampleId);
+  }
+
+  Future<bool> _loadFileWithId(int slot, String filePath, String sampleId) async {
+    if (slot < 0 || slot >= maxSampleSlots) {
+      Log.d('❌ [SAMPLE_BANK_STATE] Invalid slot: $slot');
+      return false;
+    }
+
+    try {
+      final file = File(filePath);
+      if (!await file.exists()) {
+        Log.d('❌ [SAMPLE_BANK_STATE] File does not exist: $filePath');
+        return false;
+      }
+
+      final pathBytes = utf8.encode(filePath);
+      final pathPtr = calloc<ffi.Char>(pathBytes.length + 1);
+      for (int i = 0; i < pathBytes.length; i++) {
+        pathPtr[i] = pathBytes[i];
+      }
+      pathPtr[pathBytes.length] = 0;
+
+      final idBytes = utf8.encode(sampleId);
+      final idPtr = calloc<ffi.Char>(idBytes.length + 1);
+      for (int i = 0; i < idBytes.length; i++) {
+        idPtr[i] = idBytes[i];
+      }
+      idPtr[idBytes.length] = 0;
+
+      final result = _sample_bank_ffi.sampleBankLoadWithId(slot, pathPtr, idPtr);
+      calloc.free(pathPtr);
+      calloc.free(idPtr);
+
+      if (result != 0) {
+        Log.d('❌ [SAMPLE_BANK_STATE] Failed to load file with id: $result');
+        return false;
+      }
+
+      _slotNames[slot] = filePath.split('/').last;
+      _slotPaths[slot] = filePath;
+      if (_sampleColors[slot] == null) {
+        _sampleColors[slot] = _defaultBankColors[slot % _defaultBankColors.length];
+      }
+
+      Log.d('✅ [SAMPLE_BANK_STATE] Loaded local sample id=$sampleId into slot $slot');
+      return true;
+    } catch (e) {
+      Log.d('❌ [SAMPLE_BANK_STATE] Error loading local sample id=$sampleId: $e');
       return false;
     }
   }

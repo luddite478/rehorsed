@@ -528,11 +528,13 @@ class _SampleGridWidgetState extends State<SampleGridWidget> {
     final bool isFirstTutorialCell = widget.sectionIndexOverride == null &&
         row == 0 &&
         col == 0;
-    final bool isCopyPasteTargetCell = widget.sectionIndexOverride == null &&
-        row == 2 &&
-        col == 2 &&
-        tutorialStep == TutorialStep.sequencerCopyPasteHint &&
-        appState.showPastePointer;
+    final bool isCopyPasteTutorialAnchorCell =
+        widget.sectionIndexOverride == null &&
+            tutorialStep == TutorialStep.sequencerCopyPasteHint &&
+            ((row == 0 &&
+                    col == 0 &&
+                    appState.showCopyPasteSourceCellHighlight) ||
+                (row == 2 && col == 2 && appState.showPastePointer));
     final int? jumpPasteSourceFlatIndex =
         _jumpPasteSourceFlatIndex(tableState, appState, tutorialStep);
     final bool isJumpPasteSourceCell = widget.sectionIndexOverride == null &&
@@ -545,13 +547,15 @@ class _SampleGridWidgetState extends State<SampleGridWidget> {
         col == 0 &&
         tutorialStep == TutorialStep.sequencerJumpPasteHint &&
         appState.showJumpPasteTargetCellPointer;
-    final bool pulseJumpPasteCell =
-        isJumpPasteSourceCell || isJumpPasteTargetCell;
+    final bool pulseCopyPasteTutorialCell = isCopyPasteTutorialAnchorCell;
+    final bool pulseJumpPasteCell = isJumpPasteSourceCell ||
+        isJumpPasteTargetCell ||
+        pulseCopyPasteTutorialCell;
     final bool isTutorialCell = isFirstTutorialCell &&
         tutorialStep == TutorialStep.sequencerFirstCellHint;
     final Key? cellTutorialKey = isTutorialCell
         ? appState.firstCellTutorialKey
-        : (isCopyPasteTargetCell
+        : (isCopyPasteTutorialAnchorCell
             ? appState.copyPasteTargetCellTutorialKey
             : (isJumpPasteSourceCell
                 ? appState.jumpPasteSourceCellTutorialKey
