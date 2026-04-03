@@ -105,11 +105,15 @@ class SnapshotImporter {
         onProgress?.call('Creating audio patterns...', 0.6);
         debugPrint('🎵 [SNAPSHOT_IMPORT] STEP 8: Creating SunVox patterns and syncing data');
         
-        // CRITICAL FIX: Force table state sync to update cached _sectionsCount before syncing to SunVox
-        // Without this, _sectionsCount is stale (still 1) and syncSectionToSunVox() fails bounds check for sections 1+
-        debugPrint('🔄 [SNAPSHOT_IMPORT] Forcing table state sync to update cached sections count');
-        _tableState.syncTableState();
-        debugPrint('✅ [SNAPSHOT_IMPORT] Table state synced: ${_tableState.sectionsCount} sections now visible to Dart');
+        // Converge cached and native counts before section-indexed sync.
+        debugPrint(
+            '🔄 [SNAPSHOT_IMPORT] Syncing table state to expected sections=$importedSectionsCount');
+        final sectionsSynced = _tableState.syncTableStateUntilSectionsCount(
+          importedSectionsCount,
+          maxAttempts: 24,
+        );
+        debugPrint(
+            '${sectionsSynced ? '✅' : '⚠️'} [SNAPSHOT_IMPORT] Section sync status: native=${_tableState.getNativeSectionsCount()} cached=${_tableState.sectionsCount} expected=$importedSectionsCount');
         
         _createAllSunVoxPatterns(importedSectionsCount);
         
@@ -180,12 +184,9 @@ class SnapshotImporter {
     // The appendSection() and setSectionStepCount() calls already created/resized patterns
     // Now we need to sync the cell data to those patterns
     for (int i = 0; i < sectionsCount; i++) {
-      final startStep = _tableState.getSectionStartStep(i);
-      final stepCount = _tableState.getSectionStepCount(i);
-      
       // Sync this section to SunVox pattern
       // The native code will log detailed info about what gets synced
-      debugPrint('  🔄 Section $i: start=$startStep, steps=$stepCount');
+      debugPrint('  🔄 Section $i: syncing to SunVox pattern');
       debugPrint('     Syncing to SunVox pattern...');
       _tableState.syncSectionToSunVox(i);
     }
@@ -288,19 +289,28 @@ class SnapshotImporter {
         return false;
       }
 
-      // Reconcile sections count first to avoid accidental appends
-      final currentCount = _tableState.sectionsCount;
-      debugPrint('📊 [SNAPSHOT_IMPORT] Current sections: $currentCount, target: $sectionsCount');
-      if (currentCount > sectionsCount) {
+      // Reconcile against native section count first; cached Dart count may be stale.
+      final currentNativeCount = _tableState.getNativeSectionsCount();
+      debugPrint(
+          '📊 [SNAPSHOT_IMPORT] Current sections (native=$currentNativeCount, cached=${_tableState.sectionsCount}), target: $sectionsCount');
+      if (currentNativeCount > sectionsCount) {
         debugPrint('🔄 [SNAPSHOT_IMPORT] Deleting extra sections');
-        for (int i = currentCount - 1; i >= sectionsCount; i--) {
+        for (int i = currentNativeCount - 1; i >= sectionsCount; i--) {
           _tableState.deleteSection(i, undoRecord: false);
         }
-      } else if (currentCount < sectionsCount) {
+      } else if (currentNativeCount < sectionsCount) {
         debugPrint('🔄 [SNAPSHOT_IMPORT] Adding missing sections');
-        for (int i = currentCount; i < sectionsCount; i++) {
+        for (int i = currentNativeCount; i < sectionsCount; i++) {
           _tableState.appendSection(undoRecord: false);
         }
+      }
+      final converged = _tableState.syncTableStateUntilSectionsCount(
+        sectionsCount,
+        maxAttempts: 24,
+      );
+      if (!converged) {
+        debugPrint(
+            '⚠️ [SNAPSHOT_IMPORT] Section count did not fully converge after reconcile (native=${_tableState.getNativeSectionsCount()}, cached=${_tableState.sectionsCount}, expected=$sectionsCount)');
       }
 
       // Apply per-section step counts

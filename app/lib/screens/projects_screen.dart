@@ -1132,11 +1132,7 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
       // Reset layer modes and selection (fresh start for each pattern)
       context.read<TableState>().resetAllLayerModes();
       context.read<TableState>().setUiSelectedLayer(0);
-
-      // Keep a stable fallback snapshot in case working-state import is invalid.
-      final checkpoints = patternsState.getCheckpoints(pattern.id);
-      final fallbackSnapshot =
-          checkpoints.isNotEmpty ? checkpoints.first.snapshot : null;
+      context.read<TableState>().setUiSelectedSection(0);
 
       // Initialize native systems
       try {
@@ -1152,8 +1148,7 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
         await Navigator.push(
           context,
           MaterialPageRoute(
-            builder: (context) =>
-                PatternScreen(initialSnapshot: fallbackSnapshot),
+            builder: (context) => const PatternScreen(),
           ),
         );
 

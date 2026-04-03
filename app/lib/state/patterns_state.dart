@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -34,10 +33,6 @@ class PatternsState extends ChangeNotifier {
   String? _error;
   bool _hasLoaded = false;
   
-  // Auto-save timer
-  Timer? _autoSaveTimer;
-  bool _hasUnsavedChanges = false;
-  
   final _uuid = const Uuid();
 
   /// Sequencer screens register here so [setActivePattern] can flush the current
@@ -55,8 +50,6 @@ class PatternsState extends ChangeNotifier {
   bool get isLoading => _isLoading;
   String? get error => _error;
   bool get hasLoaded => _hasLoaded;
-  bool get hasUnsavedChanges => _hasUnsavedChanges;
-  
   /// Get checkpoints for a specific pattern
   List<Checkpoint> getCheckpoints(String patternId) {
     return List.unmodifiable(_checkpointsByPattern[patternId] ?? []);
@@ -70,7 +63,6 @@ class PatternsState extends ChangeNotifier {
   
   @override
   void dispose() {
-    _autoSaveTimer?.cancel();
     super.dispose();
   }
   
@@ -629,10 +621,7 @@ class PatternsState extends ChangeNotifier {
         }
         _activePattern = updatedPattern;
         _sortPatternsByUpdatedAtDesc();
-        
-        // Clear unsaved changes flag
-        _hasUnsavedChanges = false;
-        
+
         notifyListeners();
         debugPrint('💾 [PATTERNS_STATE] Saved checkpoint: ${checkpoint.id}');
         return checkpoint;
@@ -751,35 +740,6 @@ class PatternsState extends ChangeNotifier {
   }
   
   // ============================================================================
-  // Auto-save
-  // ============================================================================
-  
-  /// Mark that there are unsaved changes
-  void markUnsavedChanges() {
-    _hasUnsavedChanges = true;
-    scheduleAutoSave();
-  }
-  
-  /// Schedule auto-save (debounced)
-  void scheduleAutoSave() {
-    _autoSaveTimer?.cancel();
-    _autoSaveTimer = Timer(const Duration(seconds: 5), () {
-      if (_hasUnsavedChanges) {
-        debugPrint('🔄 [PATTERNS_STATE] Auto-saving...');
-        // The actual auto-save will be triggered by the sequencer
-        // This just notifies that auto-save should happen
-        notifyListeners();
-      }
-    });
-  }
-  
-  /// Cancel auto-save timer
-  void cancelAutoSave() {
-    _autoSaveTimer?.cancel();
-    _hasUnsavedChanges = false;
-  }
-  
-  // ============================================================================
   // Clear
   // ============================================================================
   
@@ -792,8 +752,6 @@ class PatternsState extends ChangeNotifier {
     _hasLoaded = false;
     _error = null;
     _isLoading = false;
-    _hasUnsavedChanges = false;
-    _autoSaveTimer?.cancel();
     notifyListeners();
     debugPrint('📦 [PATTERNS_STATE] Cleared all data');
   }

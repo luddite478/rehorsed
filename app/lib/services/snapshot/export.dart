@@ -7,6 +7,7 @@ import '../../state/sequencer/table.dart';
 import '../../state/sequencer/playback.dart';
 import '../../state/sequencer/sample_bank.dart';
 import 'debug_snapshot.dart';
+import 'snapshot_table_validator.dart';
 
 /// Snapshot export service for sequencer state
 class SnapshotExporter {
@@ -28,12 +29,56 @@ class SnapshotExporter {
     String? id,
     String? description,
   }) {
+    const maxAttempts = 3;
+    for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+      // Align Dart-cached section count and pointers with native before serializing.
+      final synced = _tableState.syncTableStateForSerialization();
+      if (!synced) {
+        debugPrint(
+            '⚠️ [SNAPSHOT_EXPORT] Table sync did not fully stabilize before export (attempt $attempt/$maxAttempts)');
+      }
+      final nativeSectionsCount = _tableState.getTableStatePtr().ref.sections_count;
+      final snapshot = _buildSnapshot(
+        name: name,
+        id: id,
+        description: description,
+      );
+      final source = snapshot['source'] as Map<String, dynamic>?;
+      final table = source?['table'] as Map<String, dynamic>?;
+      final exportedSectionsCount = table?['sections_count'];
+      final structurallyValid = SnapshotTableValidator.isValidSnapshotSource(
+        snapshot,
+        maxSteps: _tableState.maxSteps,
+        maxCols: _tableState.maxCols,
+      );
+
+      if (exportedSectionsCount != nativeSectionsCount) {
+        debugPrint(
+            '⚠️ [SNAPSHOT_EXPORT] sections_count mismatch (native=$nativeSectionsCount, exported=$exportedSectionsCount), attempt $attempt/$maxAttempts');
+      } else if (!structurallyValid) {
+        debugPrint(
+            '⚠️ [SNAPSHOT_EXPORT] structural validation failed, attempt $attempt/$maxAttempts');
+      } else {
+        return JsonEncoder.withIndent('  ').convert(snapshot);
+      }
+    }
+
+    throw StateError(
+      'Snapshot export failed after bounded retries; keeping previous latest-state file.',
+    );
+  }
+
+  Map<String, dynamic> _buildSnapshot({
+    required String name,
+    String? id,
+    String? description,
+  }) {
     debugPrint('📋 [SNAPSHOT_EXPORT] === STATE BEFORE EXPORT ===');
     SnapshotDebugger.printTableState(_tableState);
     SnapshotDebugger.printSampleBankState(_sampleBankState);
     SnapshotDebugger.printPlaybackState(_playbackState);
-    
-    final snapshot = {
+
+    return {
       'schema_version': 1,
       'id': id ?? _generateSnapshotId(),
       'name': name,
@@ -46,8 +91,6 @@ class SnapshotExporter {
       },
       'renders': [], // Empty for now, can be extended later
     };
-
-    return JsonEncoder.withIndent('  ').convert(snapshot);
   }
 
   String _generateSnapshotId() {

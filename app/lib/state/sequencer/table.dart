@@ -715,6 +715,26 @@ class TableState extends ChangeNotifier {
     );
   }
 
+  /// Best-effort sync for serialization paths that require stable section count.
+  ///
+  /// Returns true when Dart and native section counts match for two consecutive
+  /// attempts (or after final attempt).
+  bool syncTableStateForSerialization({int maxAttempts = 6}) {
+    if (!_initialized) return false;
+    var lastNativeCount = -1;
+    for (var i = 0; i < maxAttempts; i++) {
+      syncTableState();
+      final nativeCount = _table_ffi.tableGetSectionsCount();
+      final dartCount = _sectionsCount;
+      final stableNow = nativeCount == dartCount && nativeCount == lastNativeCount;
+      if (stableNow) {
+        return true;
+      }
+      lastNativeCount = nativeCount;
+    }
+    return _table_ffi.tableGetSectionsCount() == _sectionsCount;
+  }
+
   /// Update local state when native state changes
   void _updateStateFromNative(_NativeTableState nativeTableState) {
     bool anyChanged = false;
@@ -963,12 +983,29 @@ class TableState extends ChangeNotifier {
   int get maxSteps => _maxSteps;
   int get maxCols => _maxCols;
   int get sectionsCount => _sectionsCount;
+  int getNativeSectionsCount() => _table_ffi.tableGetSectionsCount();
   int get uiSelectedSection => _uiSelectedSection;
   int get uiSelectedLayer => _uiSelectedLayer;
   bool get initialized => _initialized;
   SoundGridViewMode get uiSoundGridViewMode => _uiSoundGridViewMode;
   EditButtonsLayoutMode get uiEditButtonsLayoutMode => _uiEditButtonsLayoutMode;
   LayerMode get layerMode => _layerMode;
+
+  /// Best-effort sync loop used by import/recovery flows to converge cached and
+  /// native section count before section-indexed operations.
+  bool syncTableStateUntilSectionsCount(int expectedCount,
+      {int maxAttempts = 12}) {
+    if (!_initialized) return false;
+    for (int i = 0; i < maxAttempts; i++) {
+      syncTableState();
+      final native = getNativeSectionsCount();
+      if (_sectionsCount == expectedCount && native == expectedCount) {
+        return true;
+      }
+    }
+    final native = getNativeSectionsCount();
+    return _sectionsCount == expectedCount && native == expectedCount;
+  }
 
   /// Get layers-per-section count including empty layers (length = sectionsCount)
   List<int> getLayersLengthPerSection() {
@@ -1156,9 +1193,10 @@ class TableState extends ChangeNotifier {
       return;
     }
 
-    if (sectionIndex < 0 || sectionIndex >= _sectionsCount) {
+    final nativeSectionsCount = getNativeSectionsCount();
+    if (sectionIndex < 0 || sectionIndex >= nativeSectionsCount) {
       debugPrint(
-          '⚠️ [TABLE_STATE] Invalid section index: $sectionIndex (have $_sectionsCount sections)');
+          '⚠️ [TABLE_STATE] Invalid section index: $sectionIndex (have $nativeSectionsCount native sections)');
       return;
     }
 

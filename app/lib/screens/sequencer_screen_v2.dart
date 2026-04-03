@@ -4,7 +4,6 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:math';
 import 'package:provider/provider.dart';
-import 'package:flutter/services.dart';
 import '../widgets/sequencer/v1/edit_buttons_widget.dart' as v1;
 import '../widgets/sequencer/v1/top_multitask_panel_widget.dart' as v1;
 import '../widgets/sequencer/v1/sequencer_body.dart';
@@ -33,6 +32,7 @@ import '../state/sequencer/recording_waveform.dart';
 import '../state/library_samples_state.dart';
 import 'sequencer_settings_screen.dart';
 import '../services/snapshot/snapshot_service.dart';
+import '../services/snapshot/snapshot_table_validator.dart';
 import '../services/cache/working_state_cache_service.dart';
 import '../state/app_state.dart';
 import '../config/debug_flags.dart';
@@ -44,6 +44,15 @@ class SequencerScreenV2 extends StatefulWidget {
 
   @override
   State<SequencerScreenV2> createState() => _SequencerScreenV2State();
+}
+
+enum _SequencerSaveReason {
+  debounce,
+  back,
+  lifecycle,
+  patternSwitch,
+  dispose,
+  retry,
 }
 
 class _SequencerScreenV2State extends State<SequencerScreenV2>
@@ -81,7 +90,11 @@ class _SequencerScreenV2State extends State<SequencerScreenV2>
 
   // Auto-save
   Timer? _autoSaveTimer;
+  Timer? _saveRetryTimer;
   static const _autoSaveDelay = Duration(seconds: 5);
+  static const _saveRetryDelay = Duration(milliseconds: 700);
+  static const _maxSaveRetryAttempts = 3;
+  static const _leaveSaveSoftTimeout = Duration(milliseconds: 350);
   PatternsState? _patternsStateRef; // Cache reference for dispose
 
   /// Draft is always saved under this id for this screen instance (see [_performAutoSave]).
@@ -89,6 +102,10 @@ class _SequencerScreenV2State extends State<SequencerScreenV2>
   bool _bootstrapComplete = false;
   /// After [PatternsState.setActivePattern] flushes this screen's draft, shared table may belong to another pattern.
   bool _suppressAutoSave = false;
+  bool _hasPendingChanges = false;
+  DateTime? _lastDirtyAt;
+  DateTime? _lastSuccessfulSaveAt;
+  Future<void> _saveQueue = Future<void>.value();
 
   int _playbackBarBuildCount = 0;
 
@@ -170,11 +187,15 @@ class _SequencerScreenV2State extends State<SequencerScreenV2>
   // Triggered when any sequencer state changes
   void _onSequencerStateChanged() {
     _maybeAdvanceTutorialByState();
+    _hasPendingChanges = true;
+    _lastDirtyAt = DateTime.now();
 
     // Cancel existing timer and schedule new one (debouncing)
     _autoSaveTimer?.cancel();
     _autoSaveTimer = Timer(_autoSaveDelay, () {
-      _performAutoSave();
+      _requestSave(
+        reason: _SequencerSaveReason.debounce,
+      );
     });
   }
 
@@ -224,9 +245,9 @@ class _SequencerScreenV2State extends State<SequencerScreenV2>
   }
 
   /// Persists the current shared sequencer state to working storage for [patternId].
-  Future<void> _saveWorkingStateForPatternId(String patternId) async {
+  Future<bool> _saveWorkingStateForPatternId(String patternId) async {
     final patternsState = _patternsStateRef;
-    if (patternsState == null) return;
+    if (patternsState == null) return false;
 
     var patternName = 'Pattern';
     for (final p in patternsState.patterns) {
@@ -248,9 +269,13 @@ class _SequencerScreenV2State extends State<SequencerScreenV2>
     );
     final snapshot = json.decode(snapshotJson) as Map<String, dynamic>;
 
-    await WorkingStateCacheService.saveWorkingState(patternId, snapshot);
+    final saved =
+        await WorkingStateCacheService.saveWorkingState(patternId, snapshot);
+    if (!saved) {
+      return false;
+    }
     await patternsState.updatePatternTimestampForId(patternId);
-    patternsState.cancelAutoSave();
+    return true;
   }
 
   Future<void> _onBeforeActivePatternSwitch() async {
@@ -263,39 +288,141 @@ class _SequencerScreenV2State extends State<SequencerScreenV2>
 
     _autoSaveTimer?.cancel();
     try {
-      await _saveWorkingStateForPatternId(_loadedPatternId!);
-      Log.d(
-        '💾 Flushed draft before pattern switch (${_loadedPatternId!})',
-        'SEQUENCER_V2',
+      final ok = await _requestSave(
+        reason: _SequencerSaveReason.patternSwitch,
+        force: true,
+        allowBackgroundRetry: true,
       );
+      if (ok) {
+        Log.d(
+          '💾 Flushed draft before pattern switch (${_loadedPatternId!})',
+          'SEQUENCER_V2',
+        );
+      } else {
+        Log.w(
+          'Pattern switch flush did not complete, retry scheduled',
+          'SEQUENCER_V2',
+        );
+      }
       _suppressAutoSave = true;
     } catch (e) {
       Log.e('Pre-switch flush failed', 'SEQUENCER_V2', e);
     }
   }
 
-  // Perform the actual auto-save
-  Future<void> _performAutoSave() async {
+  bool _shouldSkipSave({required bool force}) {
     final patternsState = _patternsStateRef;
     if (patternsState == null ||
         _suppressAutoSave ||
         !_bootstrapComplete ||
         _loadedPatternId == null) {
-      return;
+      return true;
     }
 
     // If global active pattern no longer matches this session, do not write shared
     // table into the wrong pattern file (handled by pre-switch flush + suppress).
     if (patternsState.activePattern?.id != _loadedPatternId) {
-      return;
+      return true;
     }
+    if (force) return false;
+    if (!_hasPendingChanges) return true;
+    final dirtyAt = _lastDirtyAt;
+    final savedAt = _lastSuccessfulSaveAt;
+    if (dirtyAt != null && savedAt != null && !dirtyAt.isAfter(savedAt)) {
+      return true;
+    }
+    return false;
+  }
 
-    try {
-      await _saveWorkingStateForPatternId(_loadedPatternId!);
-      Log.d('💾 Auto-saved pattern $_loadedPatternId', 'SEQUENCER_V2');
-    } catch (e) {
-      Log.e('Auto-save failed', 'SEQUENCER_V2', e);
+  String _saveReasonLabel(_SequencerSaveReason reason) {
+    switch (reason) {
+      case _SequencerSaveReason.debounce:
+        return 'debounce';
+      case _SequencerSaveReason.back:
+        return 'back';
+      case _SequencerSaveReason.lifecycle:
+        return 'lifecycle';
+      case _SequencerSaveReason.patternSwitch:
+        return 'pattern_switch';
+      case _SequencerSaveReason.dispose:
+        return 'dispose';
+      case _SequencerSaveReason.retry:
+        return 'retry';
     }
+  }
+
+  void _scheduleBackgroundSaveRetry({
+    required _SequencerSaveReason sourceReason,
+    required int attempt,
+  }) {
+    if (attempt > _maxSaveRetryAttempts) return;
+    _saveRetryTimer?.cancel();
+    _saveRetryTimer = Timer(_saveRetryDelay, () {
+      _requestSave(
+        reason: _SequencerSaveReason.retry,
+        force: true,
+        allowBackgroundRetry: true,
+        retryAttempt: attempt,
+        retrySourceReason: sourceReason,
+      );
+    });
+  }
+
+  Future<bool> _requestSave({
+    required _SequencerSaveReason reason,
+    bool force = false,
+    bool allowBackgroundRetry = false,
+    int retryAttempt = 0,
+    _SequencerSaveReason? retrySourceReason,
+  }) async {
+    final completer = Completer<bool>();
+    _saveQueue = _saveQueue.then((_) async {
+      if (_shouldSkipSave(force: force)) {
+        completer.complete(true);
+        return;
+      }
+
+      try {
+        final ok = await _saveWorkingStateForPatternId(_loadedPatternId!);
+        if (ok) {
+          _hasPendingChanges = false;
+          _lastSuccessfulSaveAt = DateTime.now();
+          Log.d(
+            '💾 Saved pattern $_loadedPatternId (${_saveReasonLabel(reason)})',
+            'SEQUENCER_V2',
+          );
+          completer.complete(true);
+          return;
+        }
+
+        final source = retrySourceReason ?? reason;
+        if (allowBackgroundRetry && retryAttempt < _maxSaveRetryAttempts) {
+          _scheduleBackgroundSaveRetry(
+            sourceReason: source,
+            attempt: retryAttempt + 1,
+          );
+        }
+        Log.w(
+          'Save did not complete (${_saveReasonLabel(reason)}), attempt=$retryAttempt',
+          'SEQUENCER_V2',
+        );
+        completer.complete(false);
+      } catch (e) {
+        final source = retrySourceReason ?? reason;
+        if (allowBackgroundRetry && retryAttempt < _maxSaveRetryAttempts) {
+          _scheduleBackgroundSaveRetry(
+            sourceReason: source,
+            attempt: retryAttempt + 1,
+          );
+        }
+        Log.e('Save failed (${_saveReasonLabel(reason)})', 'SEQUENCER_V2', e);
+        completer.complete(false);
+      }
+    }).catchError((Object e, StackTrace st) {
+      Log.e('Save queue failure', 'SEQUENCER_V2', '$e\n$st');
+    });
+
+    return completer.future;
   }
 
   // Thread management removed in offline transformation
@@ -316,6 +443,74 @@ class _SequencerScreenV2State extends State<SequencerScreenV2>
     }
   }
 
+  /// Loads a single latest-state source for [patternId].
+  ///
+  /// Optional [widget.initialSnapshot] is only used as an explicit snapshot input
+  /// (e.g. opening a specific take/revision), not as general checkpoint fallback.
+  Future<void> _loadLatestStateForActivePattern({
+    required String patternId,
+    required String patternName,
+  }) async {
+    final maxSteps = _tableState.maxSteps;
+    final maxCols = _tableState.maxCols;
+
+    final service = SnapshotService(
+      tableState: _tableState,
+      playbackState: _playbackState,
+      sampleBankState: _sampleBankState,
+    );
+
+    final envelope =
+        await WorkingStateCacheService.loadWorkingStateEnvelope(patternId);
+    if (envelope != null) {
+      final latestSnapshot = envelope.snapshot;
+      if (!SnapshotTableValidator.isValidSnapshotSource(
+        latestSnapshot,
+        maxSteps: maxSteps,
+        maxCols: maxCols,
+      )) {
+        Log.w(
+          'Latest state failed structural validation; clearing file',
+          'SEQUENCER_V2',
+        );
+        await WorkingStateCacheService.clearWorkingState(patternId);
+      } else {
+        final importSuccess =
+            await service.importFromJson(json.encode(latestSnapshot));
+        if (importSuccess && _isImportedStateViable()) {
+          Log.i(
+            'Loaded pattern $patternName from latest state',
+            'SEQUENCER_V2',
+          );
+          return;
+        }
+      }
+    }
+
+    final explicitSnapshot = widget.initialSnapshot;
+    if (explicitSnapshot != null &&
+        SnapshotTableValidator.isValidSnapshotSource(
+          explicitSnapshot,
+          maxSteps: maxSteps,
+          maxCols: maxCols,
+        )) {
+      final importSuccess =
+          await service.importFromJson(json.encode(explicitSnapshot));
+      if (importSuccess && _isImportedStateViable()) {
+        Log.i(
+          'Loaded pattern $patternName from explicit snapshot input',
+          'SEQUENCER_V2',
+        );
+        return;
+      }
+    }
+
+    Log.w(
+      'No valid latest state could be imported for $patternName',
+      'SEQUENCER_V2',
+    );
+  }
+
   Future<void> _bootstrapInitialLoad() async {
     if (mounted) {
       setState(() {
@@ -326,48 +521,20 @@ class _SequencerScreenV2State extends State<SequencerScreenV2>
       _timerState.start();
       _sampleBrowserState.initialize();
 
-      // Load working state if available (takes priority over initial snapshot)
       final patternsState = _patternsStateRef;
       final activePattern = patternsState?.activePattern;
 
       if (activePattern != null) {
-        final workingState =
-            await WorkingStateCacheService.loadWorkingState(activePattern.id);
-        if (workingState != null) {
-          // Load working state (most recent auto-saved state)
-          final service = SnapshotService(
-            tableState: _tableState,
-            playbackState: _playbackState,
-            sampleBankState: _sampleBankState,
-          );
-          final importSuccess =
-              await service.importFromJson(json.encode(workingState));
-          if (!importSuccess || !_isImportedStateViable()) {
-            if (widget.initialSnapshot != null) {
-              Log.w(
-                'Working state import is invalid; falling back to checkpoint snapshot',
-                'SEQUENCER_V2',
-              );
-              await WorkingStateCacheService.clearWorkingState(
-                  activePattern.id);
-              await _importInitialSnapshotIfAny();
-            } else {
-              Log.w(
-                'Working state import is invalid and no checkpoint fallback exists',
-                'SEQUENCER_V2',
-              );
-            }
-          }
-          Log.i('✅ Loaded working state for pattern ${activePattern.name}',
-              'SEQUENCER_V2');
-        } else {
-          // No working state, load initial snapshot if provided
-          await _importInitialSnapshotIfAny();
-        }
+        await _loadLatestStateForActivePattern(
+          patternId: activePattern.id,
+          patternName: activePattern.name,
+        );
       } else {
-        // No active pattern, just load initial snapshot if provided
         await _importInitialSnapshotIfAny();
       }
+      // Always enter at section 1 grid (index 0) and keep section-creation closed.
+      _tableState.setUiSelectedSection(0);
+      _sectionSettingsState.closeSectionCreationOverlay();
 
       // Sequencer ready
       Log.i('Sequencer initialized successfully', 'SEQUENCER_V2');
@@ -485,11 +652,16 @@ class _SequencerScreenV2State extends State<SequencerScreenV2>
 
     // Cancel auto-save timer and force immediate save
     _autoSaveTimer?.cancel();
+    _saveRetryTimer?.cancel();
     if (!_suppressAutoSave &&
         _bootstrapComplete &&
         _loadedPatternId != null &&
         _patternsStateRef?.activePattern?.id == _loadedPatternId) {
-      _performAutoSave();
+      _requestSave(
+        reason: _SequencerSaveReason.dispose,
+        force: true,
+        allowBackgroundRetry: true,
+      );
     }
 
     // Remove auto-save listeners
@@ -534,11 +706,16 @@ class _SequencerScreenV2State extends State<SequencerScreenV2>
       Log.d('App resumed - reconfiguring Bluetooth audio session',
           'SEQUENCER_V2');
     } else if (state == AppLifecycleState.paused ||
-        state == AppLifecycleState.inactive) {
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.detached) {
       // App going to background or being closed - force immediate save
-      Log.d('App paused/inactive - forcing auto-save', 'SEQUENCER_V2');
+      Log.d('App leaving foreground - forcing auto-save', 'SEQUENCER_V2');
       _autoSaveTimer?.cancel();
-      _performAutoSave();
+      _requestSave(
+        reason: _SequencerSaveReason.lifecycle,
+        force: true,
+        allowBackgroundRetry: true,
+      );
     }
   }
 
@@ -976,7 +1153,20 @@ class _SequencerScreenV2State extends State<SequencerScreenV2>
                       context.read<AudioPlayerState>().stop();
                     } catch (_) {}
                     _autoSaveTimer?.cancel();
-                    await _performAutoSave();
+                    final saveFinished = await _requestSave(
+                      reason: _SequencerSaveReason.back,
+                      force: true,
+                      allowBackgroundRetry: true,
+                    ).timeout(
+                      _leaveSaveSoftTimeout,
+                      onTimeout: () => false,
+                    );
+                    if (!saveFinished) {
+                      Log.w(
+                        'Back navigation continued before save confirmation',
+                        'SEQUENCER_V2',
+                      );
+                    }
                     if (context.mounted) Navigator.of(context).pop();
                   },
                   onSettings: () => _navigateToSettings(context),

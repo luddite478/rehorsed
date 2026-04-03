@@ -10,9 +10,9 @@ Implemented a fully local auto-save system for the offline-only Flutter app. Thi
 - Auto-saves pattern state 5 seconds after last edit
 - Debounced to avoid excessive saves during active editing
 - Works completely offline (no server required)
-- **Instant save when pressing back button**
-- **Instant save when app goes to background**
-- **Instant save when app is closed**
+- **Save requested when pressing back / switching pattern / app lifecycle changes**
+- **Single serialized save gate prevents overlapping writes**
+- **If exit-time save can't be confirmed immediately, background retry is scheduled**
 
 ✅ **Crash Recovery**
 - Survives app crashes and force quits
@@ -44,37 +44,39 @@ Auto-save timer scheduled (5 seconds, debounced)
     ↓
 If no changes in 5 seconds:
     → Export sequencer snapshot
-    → Save to working_states/<pattern_id>.json
+    → Save to latest_states/<pattern_id>.json
     → Update pattern's updatedAt timestamp
     ↓
 Working state persisted
 ```
 
-**Instant Save (No Debounce)**
+**Exit Save (No Debounce)**
 ```
-User presses back button OR app goes to background
+User presses back OR app goes background/detached OR pattern switches
     ↓
 Cancel any pending auto-save timer
     ↓
-Immediately:
-    → Export sequencer snapshot
-    → Save to working_states/<pattern_id>.json
+Request save through the same queued save gate
+    → Export snapshot (bounded retries + structure validation)
+    → Atomic write to latest_states/<pattern_id>.json
     → Update pattern's updatedAt timestamp
     ↓
-Navigate back / App suspends with work saved
+If not confirmed in time:
+    → Continue navigation/lifecycle
+    → Retry in background (bounded attempts)
 ```
 
 ### Loading Flow
 
-```
-User opens pattern
-    ↓
-Check for working state
-    ✓ Found → Load it (most recent auto-saved state)
-    ✗ Not found → Load from checkpoint or start empty
-    ↓
-Pattern ready with latest changes
-```
+Sequencer bootstrap now uses a **single restore source**:
+
+1. Load `latest_states/<pattern_id>.json`.
+2. Validate structure (`SnapshotTableValidator`) and import.
+3. If invalid/corrupt, clear latest-state file and continue with empty/default native state.
+
+`PatternScreen(initialSnapshot: ...)` is treated as an explicit snapshot input only
+(for dedicated take/revision entry flows), not as default checkpoint fallback for
+normal project open.
 
 ### Pattern Creation Flow
 
@@ -96,21 +98,42 @@ User makes changes → Auto-save activates
 
 **Behavior now:**
 
-1. **`PatternsState.setActivePattern`** — If the new pattern id **differs** from the current one, **all** **`addBeforeActivePatternSwitchListener`** callbacks run **first** (awaited). Each **`SequencerScreenV2`** flushes the current grid to **`working_states/<outgoing_id>.json`** while **`activePattern`** still matches that session.
+1. **`PatternsState.setActivePattern`** — If the new pattern id **differs** from the current one, **all** **`addBeforeActivePatternSwitchListener`** callbacks run **first** (awaited). Each **`SequencerScreenV2`** flushes the current grid to **`latest_states/<outgoing_id>.json`** while **`activePattern`** still matches that session.
 2. **`SequencerScreenV2`** tracks **`_loadedPatternId`** for this route instance. Auto-save and dispose-time save only run when **`activePattern?.id == _loadedPatternId`**, and writes use **`updatePatternTimestampForId(patternId)`** for the saved id.
 3. After a successful pre-switch flush, the screen sets **`_suppressAutoSave`** so it does not write again after the shared table belongs to another pattern.
 
 Full detail: [features/patterns_draft_and_switching.md](./features/patterns_draft_and_switching.md).
 
-### Projects list preview (draft vs checkpoint)
+### Projects list preview (latest state vs checkpoint)
 
 For each tile, the snapshot used for the mini preview is resolved as:
 
-1. Working state file for that **`pattern_id`**, if it exists.  
-2. Otherwise **latest checkpoint** snapshot.  
-3. Otherwise an empty template (same as before when nothing existed).
+1. **Latest autosave** — `WorkingStateCacheService.loadWorkingState` reads `latest_states/` (and migrates legacy `working_states/` once), if present.  
+2. Otherwise **latest recording checkpoint** snapshot (newest-first).  
+3. Otherwise an empty template.
 
-Opening the sequencer from **Library** uses the same **checkpoint fallback** as **Projects** (`PatternScreen(initialSnapshot: …)`), so bootstrap always has a consistent import path when no draft exists.
+Opening from **Projects** and **Library** now uses `PatternScreen()` without
+checkpoint fallback. Normal restore always comes from latest-state autosave.
+
+**Export:** Before returning JSON, `SnapshotExporter` now:
+- syncs table state for serialization
+- validates `sections_count` consistency with native table state
+- validates table structure (`SnapshotTableValidator`)
+- retries export in a bounded loop and aborts write on persistent mismatch
+
+### Multi-section reliability status
+
+The save pipeline is now hardened against stale/truncated multi-section exports:
+
+1. **Queued saves only** — all triggers share one save gate to avoid overlapping writes.
+2. **Export validation before persist** — mismatched `sections_count` or invalid table shape causes bounded re-export attempts.
+3. **No destructive overwrite on failed export** — if retries fail, latest-state file is not replaced.
+4. **Atomic file writes** — latest-state writes use temp-file swap to avoid partial JSON.
+
+If a reopen still shows only one section, inspect `cache/latest_states/<pattern_id>.json` and confirm:
+- `snapshot.source.table.sections_count`
+- `snapshot.source.table.sections.length`
+- `snapshot.source.table.table_cells.length`
 
 ## Implementation Details
 
@@ -118,29 +141,42 @@ Opening the sequencer from **Library** uses the same **checkpoint fallback** as 
 
 1. **`lib/services/cache/working_state_cache_service.dart`**
    - Updated to use `patternId` instead of `threadId`
-   - Manages local JSON storage of working states
-   - Provides save/load/clear APIs
+   - Manages local JSON storage of latest states
+   - Stores in `latest_states/` and migrates legacy files from `working_states/` on first load
+   - Provides save/load/clear APIs and `loadWorkingStateEnvelope`
 
-2. **`lib/screens/sequencer_screen_v2.dart`**
+2. **`lib/services/snapshot/export.dart`**
+   - Retries export in bounded attempts
+   - Validates native/exported section count consistency
+   - Validates exported table structure before returning JSON
+
+3. **`lib/services/snapshot/snapshot_table_validator.dart`**
+   - Structural validation for `source.table` before import
+
+4. **`lib/screens/sequencer_screen_v2.dart`**
    - Auto-save timer and listeners on TableState, PlaybackState, SampleBankState
+   - Single queued `requestSave(reason)` pipeline for debounce/back/lifecycle/switch/dispose
+   - Soft-timeout exit behavior with bounded background retry
    - Registers **`addBeforeActivePatternSwitchListener`**; tracks **`_loadedPatternId`**, **`_suppressAutoSave`**
-   - **`_saveWorkingStateForPatternId`** / guarded **`_performAutoSave`**; loads working state on bootstrap
+   - **`_saveWorkingStateForPatternId`** with guarded writes for loaded pattern id
+   - **`_loadLatestStateForActivePattern`** on bootstrap
    - Cleans up listeners and **`removeBeforeActivePatternSwitchListener`** on dispose
 
-3. **`lib/state/patterns_state.dart`**
+5. **`lib/state/patterns_state.dart`**
    - `updatePatternTimestamp()` / `updatePatternTimestampForId()` for `updatedAt` after saves
    - `addBeforeActivePatternSwitchListener` / `removeBeforeActivePatternSwitchListener`
    - `setActivePattern` awaits pre-switch listeners when the active id changes (flush outgoing draft)
+   - Removed duplicate autosave timer logic (sequencer is sole autosave orchestrator)
    - Ensures patterns show in correct order on projects screen
 
-4. **`lib/screens/projects_screen.dart`**
+6. **`lib/screens/projects_screen.dart`**
    - Creates actual Pattern object when user taps "+"
    - Sets pattern as active before navigating to sequencer
    - Uses PatternNameGenerator for default names
    - Pattern tile preview: working state, else latest checkpoint, else empty template
 
-5. **`lib/screens/library_screen.dart`**
-   - Opens `PatternScreen` with checkpoint fallback snapshot when no working state (aligned with projects screen)
+7. **`lib/screens/library_screen.dart`**
+   - Opens `PatternScreen()` directly (no checkpoint fallback)
 
 ### Key Components
 
@@ -152,11 +188,11 @@ _tableState.addListener(_onSequencerStateChanged);
 _playbackState.addListener(_onSequencerStateChanged);
 _sampleBankState.addListener(_onSequencerStateChanged);
 
-// Debounced auto-save trigger
+// Debounced trigger into single queued save pipeline
 void _onSequencerStateChanged() {
   _autoSaveTimer?.cancel();
   _autoSaveTimer = Timer(_autoSaveDelay, () {
-    _performAutoSave();
+    _requestSave(reason: SaveReason.debounce);
   });
 }
 ```
@@ -166,24 +202,16 @@ void _onSequencerStateChanged() {
 Saves target the **pattern this screen instance loaded** (`_loadedPatternId`), not merely whatever `activePattern` is at timer fire (guards stacked routes / id races). Pre-switch flush uses the same helper.
 
 ```dart
-Future<void> _saveWorkingStateForPatternId(String patternId) async {
+Future<bool> _saveWorkingStateForPatternId(String patternId) async {
   final snapshotService = SnapshotService(...);
-  final snapshotJson = snapshotService.exportToJson(
-    name: patternNameFor(patternId),
-    id: patternId,
-  );
-  await WorkingStateCacheService.saveWorkingState(
+  final snapshotJson = snapshotService.exportToJson(...); // throws on invalid export after retries
+  final saved = await WorkingStateCacheService.saveWorkingState(
     patternId,
     json.decode(snapshotJson) as Map<String, dynamic>,
   );
+  if (!saved) return false;
   await patternsState.updatePatternTimestampForId(patternId);
-  patternsState.cancelAutoSave();
-}
-
-Future<void> _performAutoSave() async {
-  if (_suppressAutoSave || !_bootstrapComplete || _loadedPatternId == null) return;
-  if (patternsState.activePattern?.id != _loadedPatternId) return;
-  await _saveWorkingStateForPatternId(_loadedPatternId!);
+  return true;
 }
 ```
 
@@ -203,10 +231,11 @@ if (workingState != null) {
 
 ## Storage
 
-- **Location**: `cache/working_states/<pattern_id>.json`
+- **Location**: `cache/latest_states/<pattern_id>.json`
 - **Format**: JSON with version, pattern_id, saved_at, snapshot
 - **Size**: ~50-500 KB per pattern (depending on complexity)
-- **Persistence**: Survives app restarts, cleared manually or on checkpoint save
+- **Persistence**: Survives app restarts, cleared manually
+- **Migration**: old `cache/working_states/` files are migrated on first load
 
 ## Configuration
 
@@ -223,13 +252,12 @@ static const _autoSaveDelay = Duration(seconds: 5);
 2. **Make changes** - Edit cells, change BPM, load samples, etc.
 3. **Auto-save happens automatically**:
    - Wait 5 seconds after last edit → Auto-save triggers
-   - Press back button → Saves instantly before going back
-   - Switch apps → Saves instantly when app goes to background
-   - Close app → Saves instantly before closing
+   - Press back button / switch pattern / app lifecycle change → save is requested immediately
+   - If save cannot be confirmed fast enough during exit, app proceeds and retries save in background
 4. **Go back to projects** - Pattern shows with updated timestamp
 5. **Reopen pattern** - Your latest changes are loaded automatically
 
-**No matter how you exit, your work is always saved!**
+**Exit path is best-effort + bounded retry, without blocking navigation.**
 
 ### For Developers
 
@@ -275,7 +303,7 @@ All auto-save operations are logged:
 - [ ] Show "Last auto-saved: X minutes ago" in UI
 - [ ] Option to manually trigger save
 - [ ] Working state history (keep last 3 auto-saves)
-- [ ] Conflict resolution if checkpoint is newer than working state
+- [x] Conflict resolution if checkpoint is newer than working state (recency + validation in sequencer bootstrap)
 - [ ] Storage management UI (view/clear working states)
 
 ## Conclusion

@@ -94,7 +94,36 @@ class LocalCacheService {
   ) async {
     try {
       final file = await getCacheFile(relativePath);
-      await file.writeAsString(jsonEncode(data));
+      final nowMicros = DateTime.now().microsecondsSinceEpoch;
+      final tempFile = File('${file.path}.tmp.$nowMicros');
+      File? backupFile;
+
+      // Write fully to a temp file first, then atomically swap into place.
+      await tempFile.writeAsString(jsonEncode(data), flush: true);
+
+      if (await file.exists()) {
+        backupFile = File('${file.path}.bak.$nowMicros');
+        await file.rename(backupFile.path);
+      }
+
+      try {
+        await tempFile.rename(file.path);
+      } catch (e) {
+        // Best-effort rollback to previous known-good file.
+        if (backupFile != null && await backupFile.exists()) {
+          try {
+            if (await file.exists()) {
+              await file.delete();
+            }
+            await backupFile.rename(file.path);
+          } catch (_) {}
+        }
+        rethrow;
+      }
+
+      if (backupFile != null && await backupFile.exists()) {
+        await backupFile.delete();
+      }
       return true;
     } catch (e) {
       debugPrint('❌ [CACHE] Error writing JSON to $relativePath: $e');

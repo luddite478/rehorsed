@@ -47,7 +47,9 @@ class _SequencerBodyState extends State<SequencerBody> {
   @override
   void initState() {
     super.initState();
-    final initialPage = context.read<TableState>().uiSelectedSection;
+    final table = context.read<TableState>();
+    final maxIndex = (table.sectionsCount - 1).clamp(0, TableState.maxSections);
+    final initialPage = table.uiSelectedSection.clamp(0, maxIndex);
     _pageController = PageController(
       initialPage: initialPage,
       viewportFraction: 1.0,

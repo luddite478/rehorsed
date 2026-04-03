@@ -838,6 +838,7 @@ class _LibraryScreenState extends State<LibraryScreen> with TickerProviderStateM
 
       tableState.resetAllLayerModes();
       tableState.setUiSelectedLayer(0);
+      tableState.setUiSelectedSection(0);
 
       try {
         TableBindings().tableInit();
@@ -848,16 +849,11 @@ class _LibraryScreenState extends State<LibraryScreen> with TickerProviderStateM
         debugPrint('❌ Failed to init native systems from library: $e');
       }
 
-      final checkpoints = patternsState.getCheckpoints(pattern.id);
-      final fallbackSnapshot =
-          checkpoints.isNotEmpty ? checkpoints.first.snapshot : null;
-
       if (!mounted) return;
       await Navigator.push(
         context,
         MaterialPageRoute(
-          builder: (context) =>
-              PatternScreen(initialSnapshot: fallbackSnapshot),
+          builder: (context) => const PatternScreen(),
         ),
       );
     } catch (e) {
