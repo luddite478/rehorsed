@@ -95,6 +95,7 @@ class _SequencerScreenV2State extends State<SequencerScreenV2>
   static const _saveRetryDelay = Duration(milliseconds: 700);
   static const _maxSaveRetryAttempts = 3;
   static const _leaveSaveSoftTimeout = Duration(milliseconds: 350);
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   PatternsState? _patternsStateRef; // Cache reference for dispose
 
   /// Draft is always saved under this id for this screen instance (see [_performAutoSave]).
@@ -743,7 +744,9 @@ class _SequencerScreenV2State extends State<SequencerScreenV2>
         ChangeNotifierProvider.value(value: _uiSelectionState),
       ],
       child: Scaffold(
+        key: _scaffoldKey,
         backgroundColor: AppColors.sequencerPageBackground,
+        endDrawer: _buildSequencerNavDrawer(),
         body: Stack(
           children: [
             // Sequencer view only (thread view removed)
@@ -1008,7 +1011,8 @@ class _SequencerScreenV2State extends State<SequencerScreenV2>
               _SequencerTutorialAnchorOverlay(
                 anchorKey: appState.patternMenuButtonTutorialKey,
                 label: appState.tutorialStepLabel,
-                text: 'Press Pattern menu button to return to the patterns page.',
+                text:
+                    'Open the menu, then tap Patterns to return to the patterns page.',
               ),
           ],
         ),
@@ -1135,6 +1139,92 @@ class _SequencerScreenV2State extends State<SequencerScreenV2>
     );
   }
 
+  Future<void> _navigateBackToPatterns() async {
+    if (_playbackState.isPlaying) _playbackState.stop();
+    context.read<AppState>().markPatternMenuBackAction();
+    try {
+      context.read<AudioPlayerState>().stop();
+    } catch (_) {}
+    _autoSaveTimer?.cancel();
+    final saveFinished = await _requestSave(
+      reason: _SequencerSaveReason.back,
+      force: true,
+      allowBackgroundRetry: true,
+    ).timeout(
+      _leaveSaveSoftTimeout,
+      onTimeout: () => false,
+    );
+    if (!saveFinished) {
+      Log.w(
+        'Back navigation continued before save confirmation',
+        'SEQUENCER_V2',
+      );
+    }
+    if (mounted) Navigator.of(context).pop();
+  }
+
+  Widget _buildSequencerNavDrawer() {
+    return Builder(
+      builder: (drawerContext) {
+        final width = MediaQuery.sizeOf(drawerContext).width * 0.75;
+        final textStyle = TextStyle(
+          color: AppColors.sequencerText,
+          fontSize: 17,
+          fontWeight: FontWeight.w600,
+        );
+        return Drawer(
+          width: width,
+          backgroundColor: AppColors.sequencerSurfaceRaised,
+          child: SafeArea(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+                  child: Text(
+                    'Menu',
+                    style: TextStyle(
+                      color: AppColors.sequencerLightText,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0.3,
+                    ),
+                  ),
+                ),
+                ListTile(
+                  leading: Icon(
+                    Icons.grid_view_rounded,
+                    color: AppColors.sequencerAccent,
+                  ),
+                  title: Text('Patterns', style: textStyle),
+                  onTap: () {
+                    Navigator.of(drawerContext).pop();
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      if (mounted) unawaited(_navigateBackToPatterns());
+                    });
+                  },
+                ),
+                ListTile(
+                  leading: Icon(
+                    Icons.graphic_eq,
+                    color: AppColors.sequencerAccent,
+                  ),
+                  title: Text('Takes', style: textStyle),
+                  onTap: () {
+                    Navigator.of(drawerContext).pop();
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      if (mounted) _showRecordingsOverlay(context);
+                    });
+                  },
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   void _showRecordingsOverlay(BuildContext context,
       {bool highlightNewest = false}) {
     if (_isFinalizingTake) {
@@ -1170,31 +1260,9 @@ class _SequencerScreenV2State extends State<SequencerScreenV2>
               Expanded(
                 flex: _sequencerBodyFlex,
                 child: SequencerBody(
-                  onBack: () async {
-                    if (_playbackState.isPlaying) _playbackState.stop();
-                    context.read<AppState>().markPatternMenuBackAction();
-                    try {
-                      context.read<AudioPlayerState>().stop();
-                    } catch (_) {}
-                    _autoSaveTimer?.cancel();
-                    final saveFinished = await _requestSave(
-                      reason: _SequencerSaveReason.back,
-                      force: true,
-                      allowBackgroundRetry: true,
-                    ).timeout(
-                      _leaveSaveSoftTimeout,
-                      onTimeout: () => false,
-                    );
-                    if (!saveFinished) {
-                      Log.w(
-                        'Back navigation continued before save confirmation',
-                        'SEQUENCER_V2',
-                      );
-                    }
-                    if (context.mounted) Navigator.of(context).pop();
-                  },
+                  onOpenNavMenu: () =>
+                      _scaffoldKey.currentState?.openEndDrawer(),
                   onSettings: () => _navigateToSettings(context),
-                  onRecordings: () => _showRecordingsOverlay(context),
                 ),
               ),
               Expanded(

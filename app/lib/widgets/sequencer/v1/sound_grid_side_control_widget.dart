@@ -13,16 +13,14 @@ enum SideControlSide { left, right }
 
 class SoundGridSideControlWidget extends StatelessWidget {
   final SideControlSide side;
-  final VoidCallback? onBack;
+  final VoidCallback? onOpenNavMenu;
   final VoidCallback? onSettings;
-  final VoidCallback? onRecordings;
 
   const SoundGridSideControlWidget({
     super.key,
     this.side = SideControlSide.left,
-    this.onBack,
+    this.onOpenNavMenu,
     this.onSettings,
-    this.onRecordings,
   });
 
   @override
@@ -86,7 +84,7 @@ class SoundGridSideControlWidget extends StatelessWidget {
                   // ── Left side: Expanded layout — no overflow possible ─────────
                   ? Column(
                       children: [
-                        // Nav: menu / settings / takes
+                        // Nav: menu (opens Patterns / Takes drawer)
                         Expanded(
                           child: _buildSquareButton(
                             key: appState.activeTutorialStep ==
@@ -106,21 +104,8 @@ class SoundGridSideControlWidget extends StatelessWidget {
                                     )) {
                                       return;
                                     }
-                                    onBack?.call();
+                                    onOpenNavMenu?.call();
                                   },
-                          ),
-                        ),
-                        const SizedBox(height: 3),
-                        Expanded(
-                          child: _buildSquareButton(
-                            size: buttonWidth,
-                            icon: Icons.graphic_eq,
-                            color: AppColors.sequencerAccent,
-                            onPressed: appState.canInteractWithTutorialTarget(
-                              TutorialInteractionTarget.recordingsButton,
-                            )
-                                ? onRecordings
-                                : null,
                           ),
                         ),
                         const SizedBox(height: 3),

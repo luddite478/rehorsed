@@ -17,15 +17,13 @@ enum SequencerBodyMode {
 }
 
 class SequencerBody extends StatefulWidget {
-  final VoidCallback? onBack;
+  final VoidCallback? onOpenNavMenu;
   final VoidCallback? onSettings;
-  final VoidCallback? onRecordings;
 
   const SequencerBody({
     super.key,
-    this.onBack,
+    this.onOpenNavMenu,
     this.onSettings,
-    this.onRecordings,
   });
 
   // 🎯 SIZING CONFIGURATION - Easy to control layout proportions
@@ -120,9 +118,8 @@ class _SequencerBodyState extends State<SequencerBody> {
                   (SequencerBody.sideControlWidthPercent / 100.0),
               child: SoundGridSideControlWidget(
                 side: SideControlSide.left,
-                onBack: widget.onBack,
+                onOpenNavMenu: widget.onOpenNavMenu,
                 onSettings: widget.onSettings,
-                onRecordings: widget.onRecordings,
               ),
             ),
 

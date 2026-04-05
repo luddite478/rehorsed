@@ -88,7 +88,6 @@ enum TutorialInteractionTarget {
   takesPlayButton,
   takesAddButton,
   takesCloseButton,
-  recordingsButton,
   patternMenuButton,
   projectsLibraryFolderButton,
   libraryLatestRecordingButton,
