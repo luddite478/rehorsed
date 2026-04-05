@@ -422,74 +422,108 @@ class _SectionControlButtonState extends State<_SectionControlButton> {
             BoxShadow(color: AppColors.sequencerSurfaceRaised, blurRadius: 0.5, offset: const Offset(0, -0.5)),
           ],
         ),
-        // FittedBox prevents any text overflow by scaling content to fit the square
-        child: FittedBox(
-          fit: BoxFit.scaleDown,
-          child: Padding(
-            padding: const EdgeInsets.all(2),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              mainAxisAlignment: MainAxisAlignment.center,
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            // Account for 1px horizontal divider between the two halves
+            final halfH = (constraints.maxHeight - 1) / 2;
+            final topFontSize = (halfH * 0.52).clamp(10.0, 22.0);
+            final bottomFontInfinity = (halfH * 0.5).clamp(10.0, 22.0);
+            final bottomFontSong = (halfH * 0.38).clamp(7.0, 16.0);
+            final dividerColor = _isPressed
+                ? Colors.white.withOpacity(0.22)
+                : AppColors.sequencerBorder.withOpacity(0.55);
+            return Column(
               children: [
-              Text(
-                '${widget.sectionNumber}',
-                style: TextStyle(
-                  color: _isPressed
-                      ? Colors.white
-                      : AppColors.sequencerLightText,
-                  fontSize: widget.size * 0.55,
-                  fontWeight: FontWeight.w700,
-                  height: 0.9,
-                ),
-              ),
-              ValueListenableBuilder<bool>(
-                valueListenable: playbackState.songModeNotifier,
-                builder: (context, isSongMode, __) {
-                  if (!isSongMode) {
-                    // Loop mode: show infinity symbol
-                    final color = Color.lerp(AppColors.menuErrorColor, AppColors.sequencerLightText, 0.5)!;
-                    return Text(
-                          '∞',
+                Expanded(
+                  child: Center(
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 2),
+                        child: Text(
+                          '${widget.sectionNumber}',
                           style: TextStyle(
-                            color: color,
-                            fontSize: widget.size * 0.55,
-                            fontWeight: FontWeight.w600,
+                            color: _isPressed
+                                ? Colors.white
+                                : AppColors.sequencerLightText,
+                            fontSize: topFontSize,
+                            fontWeight: FontWeight.w700,
                             height: 1.0,
                           ),
-                        );
-                  } else {
-                    // Song mode: show loop counter
-                    return ValueListenableBuilder<int>(
-                      valueListenable: playbackState.currentSectionLoopNotifier,
-                      builder: (context, currentLoopZeroBased, __) {
-                        return ValueListenableBuilder<int>(
-                          valueListenable: playbackState.currentSectionLoopsNumNotifier,
-                          builder: (context, totalLoops, ___) {
-                            final displayCurrent = (currentLoopZeroBased + 1).clamp(1, totalLoops);
-                            final label = '$displayCurrent/$totalLoops';
-                            final color = Color.lerp(AppColors.menuErrorColor, AppColors.sequencerLightText, 0.5)!;
-                            return Text(
-                                  label,
-                                  style: TextStyle(
-                                    color: color,
-                                    fontSize: widget.size * 0.35,
-                                    fontWeight: FontWeight.w600,
-                                    height: 1.0,
-                                    letterSpacing: 0.2,
-                                  ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                Container(height: 1, width: double.infinity, color: dividerColor),
+                Expanded(
+                  child: Center(
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 2),
+                        child: ValueListenableBuilder<bool>(
+                          valueListenable: playbackState.songModeNotifier,
+                          builder: (context, isSongMode, __) {
+                            if (!isSongMode) {
+                              final color = Color.lerp(
+                                AppColors.menuErrorColor,
+                                AppColors.sequencerLightText,
+                                0.5,
+                              )!;
+                              return Text(
+                                '∞',
+                                style: TextStyle(
+                                  color: color,
+                                  fontSize: bottomFontInfinity,
+                                  fontWeight: FontWeight.w600,
+                                  height: 1.0,
+                                ),
+                              );
+                            }
+                            return ValueListenableBuilder<int>(
+                              valueListenable:
+                                  playbackState.currentSectionLoopNotifier,
+                              builder: (context, currentLoopZeroBased, __) {
+                                return ValueListenableBuilder<int>(
+                                  valueListenable: playbackState
+                                      .currentSectionLoopsNumNotifier,
+                                  builder: (context, totalLoops, ___) {
+                                    final displayCurrent =
+                                        (currentLoopZeroBased + 1)
+                                            .clamp(1, totalLoops);
+                                    final label =
+                                        '$displayCurrent/$totalLoops';
+                                    final color = Color.lerp(
+                                      AppColors.menuErrorColor,
+                                      AppColors.sequencerLightText,
+                                      0.5,
+                                    )!;
+                                    return Text(
+                                      label,
+                                      style: TextStyle(
+                                        color: color,
+                                        fontSize: bottomFontSong,
+                                        fontWeight: FontWeight.w600,
+                                        height: 1.0,
+                                        letterSpacing: 0.2,
+                                      ),
+                                    );
+                                  },
+                                );
+                              },
                             );
                           },
-                        );
-                      },
-                    );
-                  }
-                },
-              ),
-            ],
-          ),   // Column
-        ),     // Padding
-      ),       // FittedBox
-    ),         // Container
-  );           // GestureDetector
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
+      ),
+    );
   }
 } 

@@ -315,6 +315,9 @@ class TutorialService extends ChangeNotifier {
   final GlobalKey selectModeButtonTutorialKey = GlobalKey();
   final GlobalKey sampleGridTutorialKey = GlobalKey();
 
+  /// Bottom of the +/- step row inside the sound grid (for tutorial card in the gap above edit buttons).
+  final GlobalKey gridStepRowControlsTutorialKey = GlobalKey();
+
   /// "Create new section" primary action on [SectionCreationOverlay] (sections swipe step).
   final GlobalKey sectionCreatePrimaryButtonTutorialKey = GlobalKey();
   final GlobalKey sectionMenuButtonTutorialKey = GlobalKey();

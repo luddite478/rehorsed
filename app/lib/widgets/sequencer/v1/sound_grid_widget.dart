@@ -1574,7 +1574,20 @@ class _SampleGridWidgetState extends State<SampleGridWidget> {
                       );
                     } else {
                       // Control buttons at the bottom
+                      final int displaySection = widget.sectionIndexOverride ??
+                          tableState.uiSelectedSection;
+                      final bool isActiveSectionGrid =
+                          displaySection == tableState.uiSelectedSection;
+                      final bool attachStepControlsTutorialKey =
+                          isActiveSectionGrid &&
+                              (tutorialStep ==
+                                      TutorialStep.sequencerSectionTwoSamplesHint ||
+                                  tutorialStep ==
+                                      TutorialStep.sequencerSectionTwoStepsHint);
                       return RepaintBoundary(
+                        key: attachStepControlsTutorialKey
+                            ? appState.gridStepRowControlsTutorialKey
+                            : null,
                         child: Container(
                           margin: const EdgeInsets.only(bottom: 8, top: 4),
                           child: _buildGridRowControls(tableState),

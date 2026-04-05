@@ -894,7 +894,7 @@ class _SequencerScreenV2State extends State<SequencerScreenV2>
                         : null),
                 label: appState.tutorialStepLabel,
                 text:
-                    'Copy a sample, then select cell below and press Paste three times (Jump spacing is 2).',
+                    'Select and Copy a sample, then select cell below and press Paste three times (Jump spacing is 2).',
               ),
             if (tutorialStep == TutorialStep.sequencerPlaybackHint)
               _SequencerTutorialAnchorOverlay(
@@ -945,21 +945,22 @@ class _SequencerScreenV2State extends State<SequencerScreenV2>
               ),
             if (tutorialStep == TutorialStep.sequencerSectionTwoStepsHint)
               _SequencerTutorialAnchorOverlay(
-                anchorKey: appState.showSectionTwoStepsIncreasePointer
-                    ? appState.sectionStepsIncreaseTutorialKey
-                    : appState.sectionStepsDecreaseTutorialKey,
+                anchorKey: appState.sampleGridTutorialKey,
                 label: appState.tutorialStepLabel,
                 text: appState.sectionTwoStepsHintInstruction,
-                textPosition: _TutorialTextPosition.top,
+                centerText: false,
+                centerInRectKey: appState.sampleGridTutorialKey,
+                textPosition: _TutorialTextPosition.belowGrid,
+                drawCoachArrow: false,
               ),
             if (tutorialStep == TutorialStep.sequencerSectionTwoSamplesHint)
               _SequencerTutorialAnchorOverlay(
                 anchorKey: appState.sampleGridTutorialKey,
                 label: appState.tutorialStepLabel,
                 text:
-                    'Place at least 5 samples in five different cells in this section.',
+                    'Place at least 5 samples in 5 different cells in this section.',
                 centerText: false,
-                textPosition: _TutorialTextPosition.bottom,
+                textPosition: _TutorialTextPosition.stepControlsGap,
                 centerInRectKey: appState.sampleGridTutorialKey,
                 drawCoachArrow: false,
               ),
@@ -2063,6 +2064,15 @@ class _SequencerTutorialAnchorOverlayState
               (viewport.height * ti.top).floorToDouble());
           final bottomInset = max(0.0,
               (viewport.height * ti.bottom).floorToDouble());
+          final spaceBelowGrid = max(
+            0.0,
+            viewport.height -
+                textLayoutRect.bottom -
+                8 -
+                bottomInset -
+                safeBottom -
+                8,
+          );
           final availableForCard =
               max(0.0, viewport.width - leftInset - rightInset);
           final textWidth = min(272.0, availableForCard * 0.995).floorToDouble();
@@ -2077,29 +2087,53 @@ class _SequencerTutorialAnchorOverlayState
               ? _TutorialTextPosition.center
               : widget.textPosition;
           const cardHeightEstimate = 126.0;
-          final useStep15BottomLayout =
+          // Step 15 (two samples): tall scrollable card; cap height when using belowGrid
+          // or stepControlsGap so the card does not cover edit buttons / stays in the gap.
+          final useStep15SamplesLayout =
               appState.activeTutorialStep ==
                       TutorialStep.sequencerSectionTwoSamplesHint &&
-                  position == _TutorialTextPosition.bottom;
-          // Pre-change layout used a fixed height for all steps; step 15 (bottom) uses
-          // a measured height so long copy stays on screen.
+                  (position == _TutorialTextPosition.bottom ||
+                      position == _TutorialTextPosition.belowGrid ||
+                      position == _TutorialTextPosition.stepControlsGap);
           const tutorialCardChromeExcludingBody = 94.0;
-          final layoutCardHeight = useStep15BottomLayout
-              ? min(
-                  viewport.height * 0.92,
-                  max(
-                    cardHeightEstimate,
-                    ti.cardPaddingVertical * 2 +
-                        tutorialCardChromeExcludingBody +
-                        maxCardBodyHeight,
-                  ),
+          final rawStep15SamplesCardHeight = min(
+            viewport.height * 0.92,
+            max(
+              cardHeightEstimate,
+              ti.cardPaddingVertical * 2 +
+                  tutorialCardChromeExcludingBody +
+                  maxCardBodyHeight,
+            ),
+          );
+          final stepControlsRectForLayout =
+              position == _TutorialTextPosition.stepControlsGap
+                  ? _tutorialResolveAnchorRect(
+                      appState.gridStepRowControlsTutorialKey, viewport)
+                  : null;
+          final gapHeightCapForStepControls = stepControlsRectForLayout != null
+              ? max(
+                  100.0,
+                  textLayoutRect.bottom -
+                      stepControlsRectForLayout.bottom +
+                      10.0,
                 )
+              : null;
+          final layoutCardHeight = useStep15SamplesLayout
+              ? (position == _TutorialTextPosition.belowGrid
+                  ? min(spaceBelowGrid, rawStep15SamplesCardHeight)
+                  : position == _TutorialTextPosition.stepControlsGap
+                      ? min(
+                          gapHeightCapForStepControls ??
+                              rawStep15SamplesCardHeight,
+                          rawStep15SamplesCardHeight,
+                        )
+                      : rawStep15SamplesCardHeight)
               : cardHeightEstimate;
           final minL = leftInset;
           final maxL = max(minL, viewport.width - textWidth - rightInset);
           // Absolute top/bottom bounds that account for safe area + percent inset.
           final absoluteMinTop = max(safeTop, safeTop + topInset);
-          final absoluteMaxTop = useStep15BottomLayout
+          final absoluteMaxTop = useStep15SamplesLayout
               ? max(
                   absoluteMinTop,
                   viewport.height -
@@ -2137,6 +2171,35 @@ class _SequencerTutorialAnchorOverlayState
                   safeBottom -
                   8;
               break;
+            case _TutorialTextPosition.belowGrid:
+              // Sit under the sound grid (sampleGridTutorialKey rect) so +/- row stays tappable.
+              desiredLeft = textLayoutRect.center.dx - textWidth / 2;
+              desiredTop = textLayoutRect.bottom + 8;
+              break;
+            case _TutorialTextPosition.stepControlsGap:
+              // Between +/- row and bottom of grid container (above edit buttons).
+              final gridRect = textLayoutRect;
+              final controlsRect = _tutorialResolveAnchorRect(
+                  appState.gridStepRowControlsTutorialKey, viewport);
+              desiredLeft = gridRect.center.dx - textWidth / 2;
+              if (controlsRect != null) {
+                const double overlapIntoStepRow = 8.0;
+                const double marginAboveGridBottom = 2.0;
+                final double maxCardBottom =
+                    gridRect.bottom - marginAboveGridBottom;
+                var top = controlsRect.bottom - overlapIntoStepRow;
+                if (top + layoutCardHeight > maxCardBottom) {
+                  top = maxCardBottom - layoutCardHeight;
+                }
+                final minTop = gridRect.top + 8.0;
+                if (top < minTop) {
+                  top = minTop;
+                }
+                desiredTop = top;
+              } else {
+                desiredTop = gridRect.bottom + 8;
+              }
+              break;
           }
 
           final textLeft = (() {
@@ -2159,6 +2222,26 @@ class _SequencerTutorialAnchorOverlayState
                 textLayoutRect.bottom - layoutCardHeight - 8,
               );
               return desiredTop.clamp(minTop, max(minTop, maxTop)).toDouble();
+            }
+            if (position == _TutorialTextPosition.belowGrid) {
+              final minTop = max(absoluteMinTop, textLayoutRect.bottom + 8);
+              final maxTop = viewport.height -
+                  layoutCardHeight -
+                  bottomInset -
+                  safeBottom -
+                  8;
+              if (minTop > maxTop) {
+                return max(absoluteMinTop, maxTop);
+              }
+              return desiredTop.clamp(minTop, maxTop).toDouble();
+            }
+            if (position == _TutorialTextPosition.stepControlsGap) {
+              final maxTop = viewport.height -
+                  layoutCardHeight -
+                  bottomInset -
+                  safeBottom -
+                  8;
+              return desiredTop.clamp(absoluteMinTop, maxTop).toDouble();
             }
             return desiredTop.clamp(absoluteMinTop, absoluteMaxTop).toDouble();
           })();
@@ -2446,6 +2529,11 @@ enum _TutorialTextPosition {
   top,
   right,
   bottom,
+  /// Card top sits at [centerInRectKey].bottom + padding (under sound grid).
+  belowGrid,
+  /// Card in the gap between +/- row and bottom of grid (above edit buttons).
+  /// Uses [AppState.gridStepRowControlsTutorialKey] and [centerInRectKey].
+  stepControlsGap,
 }
 
 Rect? _tutorialResolveAnchorRect(GlobalKey key, Size viewport) {
@@ -2457,11 +2545,9 @@ Rect? _tutorialResolveAnchorRect(GlobalKey key, Size viewport) {
     if (!box.hasSize || !box.attached) return null;
     final topLeft = box.localToGlobal(Offset.zero);
     return topLeft & box.size;
-  } on FlutterError {
-    // Anchor can briefly become inactive during rebuilds; retry next frame.
-    return null;
-  } on AssertionError {
-    // Guard debug-mode assertions from transient inactive elements.
+  } catch (_) {
+    // Anchor can briefly be invalid during rebuilds (e.g. sliver children not
+    // laid out yet). localToGlobal may throw TypeError, not only FlutterError.
     return null;
   }
 }

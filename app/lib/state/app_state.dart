@@ -100,6 +100,8 @@ class AppState extends ChangeNotifier {
   GlobalKey get selectModeButtonTutorialKey =>
       _tutorialService.selectModeButtonTutorialKey;
   GlobalKey get sampleGridTutorialKey => _tutorialService.sampleGridTutorialKey;
+  GlobalKey get gridStepRowControlsTutorialKey =>
+      _tutorialService.gridStepRowControlsTutorialKey;
   GlobalKey get sectionCreatePrimaryButtonTutorialKey =>
       _tutorialService.sectionCreatePrimaryButtonTutorialKey;
   GlobalKey get sectionMenuButtonTutorialKey =>

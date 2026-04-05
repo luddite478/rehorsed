@@ -22,8 +22,6 @@ class SectionSettingsWidget extends StatefulWidget {
 }
 
 class _SectionSettingsWidgetState extends State<SectionSettingsWidget> {
-  String _selectedControl = 'LOOPS'; // Default to LOOPS
-  
   // Simple variables for main layout areas (same as sound settings template)
   double _headerButtonsHeight = 0.45;     // 45% for header buttons area
   double _sliderTileHeightPercent = 0.50; // 50% for slider tile area
@@ -96,13 +94,8 @@ class _SectionSettingsWidgetState extends State<SectionSettingsWidget> {
                   // Control tile area - controllable via _sliderTileHeightPercent
                   Expanded(
                     flex: (_sliderTileHeightPercent * 100).round(),
-                    child: (_selectedControl == 'STEPS' ||
-                            appState.activeTutorialStep ==
-                                TutorialStep.sequencerSectionTwoStepsHint)
-                        ? _buildStepsControl(tableState, currentSection,
-                            contentHeight, padding, appState)
-                        : _buildLoopsControl(playbackState, currentSection,
-                            contentHeight, padding, labelFontSize, appState),
+                    child: _buildLoopsControl(playbackState, currentSection,
+                        contentHeight, padding, labelFontSize, appState),
                   ),
                   
                   // Bottom spacer - controllable via _spacingHeight
@@ -160,40 +153,7 @@ class _SectionSettingsWidgetState extends State<SectionSettingsWidget> {
                 ),
               ),
             ),
-            // LOOPS button
-            Padding(
-              padding: EdgeInsets.only(right: availableWidth * 0.02),
-              child: SizedBox(
-                width: availableWidth * 0.20, // 20% of available width
-                child: _buildSettingsButton(
-                  'LOOPS', 
-                  _selectedControl == 'LOOPS', 
-                  headerHeight * 0.7, 
-                  labelFontSize, 
-                  () {
-                    setState(() {
-                      _selectedControl = 'LOOPS';
-                    });
-                  }
-                ),
-              ),
-            ),
-            Padding(
-              padding: EdgeInsets.only(right: availableWidth * 0.02),
-              child: SizedBox(
-                width: availableWidth * 0.20, // 20% of available width
-                child: _buildSettingsButton(
-                    'STEPS',
-                    _selectedControl == 'STEPS',
-                    headerHeight * 0.7,
-                    labelFontSize, () {
-                  setState(() {
-                    _selectedControl = 'STEPS';
-                  });
-                }),
-              ),
-            ),
-            
+
             // Optional spacing before action buttons
             if (widget.showCloseButton)
               SizedBox(width: availableWidth * 0.04),
@@ -232,50 +192,6 @@ class _SectionSettingsWidgetState extends State<SectionSettingsWidget> {
                 ),
               ),
           ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildSettingsButton(String label, bool isSelected, double height, double fontSize, VoidCallback? onTap) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        height: height,
-        decoration: BoxDecoration(
-          color: isSelected 
-              ? AppColors.sequencerAccent 
-              : AppColors.sequencerSurfaceRaised,
-          borderRadius: BorderRadius.circular(2),
-          border: Border.all(
-            color: AppColors.sequencerBorder,
-            width: 0.5,
-          ),
-          boxShadow: [
-            BoxShadow(
-              color: AppColors.sequencerShadow,
-              blurRadius: 1.5,
-              offset: const Offset(0, 1),
-            ),
-            BoxShadow(
-              color: AppColors.sequencerSurfaceRaised,
-              blurRadius: 0.5,
-              offset: const Offset(0, -0.5),
-            ),
-          ],
-        ),
-        child: Center(
-          child: Text(
-            label,
-            style: TextStyle(
-              color: isSelected 
-                  ? AppColors.sequencerPageBackground 
-                  : AppColors.sequencerText,
-              fontSize: fontSize,
-              fontWeight: FontWeight.w600,
-              letterSpacing: 0.5,
-            ),
-          ),
         ),
       ),
     );
@@ -446,125 +362,6 @@ class _SectionSettingsWidgetState extends State<SectionSettingsWidget> {
             ),
           ),
         ),
-      ),
-    );
-  }
-
-  Widget _buildStepsControl(
-    TableState tableState,
-    int currentSection,
-    double height,
-    double padding,
-    AppState appState,
-  ) {
-    return Container(
-      padding:
-          EdgeInsets.symmetric(horizontal: padding * 0.3, vertical: padding * 0.15),
-      decoration: BoxDecoration(
-        color: AppColors.sequencerSurfaceRaised,
-        borderRadius: BorderRadius.circular(2),
-        border: Border.all(
-          color: AppColors.sequencerBorder,
-          width: 1,
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: AppColors.sequencerShadow,
-            blurRadius: 2,
-            offset: const Offset(0, 1),
-          ),
-          BoxShadow(
-            color: AppColors.sequencerSurfaceRaised,
-            blurRadius: 1,
-            offset: const Offset(0, -0.5),
-          ),
-        ],
-      ),
-      child: Builder(
-        builder: (context) {
-          final stepCount = tableState.getSectionStepCount(currentSection);
-          final availableHeight = height - (padding * 0.3);
-          final buttonSize = availableHeight * 0.75;
-          final counterWidth = availableHeight * 1.05;
-          final counterHeight = availableHeight * 0.75;
-          final spacing = availableHeight * 0.3;
-
-          return Center(
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                _buildArrowButton(
-                  context,
-                  key: appState.activeTutorialStep ==
-                              TutorialStep.sequencerSectionTwoStepsHint &&
-                          appState.showSectionTwoStepsDecreasePointer
-                      ? appState.sectionStepsDecreaseTutorialKey
-                      : null,
-                  pulseHighlight: appState.activeTutorialStep ==
-                          TutorialStep.sequencerSectionTwoStepsHint &&
-                      appState.showSectionTwoStepsDecreasePointer,
-                  icon: Icons.chevron_left,
-                  onTap: () {
-                    if (!appState.canInteractWithTutorialTarget(
-                        TutorialInteractionTarget.sectionStepsDecrease)) {
-                      return;
-                    }
-                    if (stepCount > 1) {
-                      tableState.setSectionStepCount(currentSection, stepCount - 1);
-                      HapticFeedback.selectionClick();
-                    }
-                  },
-                  enabled: stepCount > 1,
-                  size: buttonSize,
-                ),
-                SizedBox(width: spacing),
-                Container(
-                  width: counterWidth,
-                  height: counterHeight,
-                  decoration: BoxDecoration(
-                    color: AppColors.sequencerSurfacePressed,
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  child: Center(
-                    child: Text(
-                      '$stepCount',
-                      style: TextStyle(
-                        color: AppColors.sequencerAccent,
-                        fontSize: counterHeight * 0.6,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-                ),
-                SizedBox(width: spacing),
-                _buildArrowButton(
-                  context,
-                  key: appState.activeTutorialStep ==
-                              TutorialStep.sequencerSectionTwoStepsHint &&
-                          appState.showSectionTwoStepsIncreasePointer
-                      ? appState.sectionStepsIncreaseTutorialKey
-                      : null,
-                  pulseHighlight: appState.activeTutorialStep ==
-                          TutorialStep.sequencerSectionTwoStepsHint &&
-                      appState.showSectionTwoStepsIncreasePointer,
-                  icon: Icons.chevron_right,
-                  onTap: () {
-                    if (!appState.canInteractWithTutorialTarget(
-                        TutorialInteractionTarget.sectionStepsIncrease)) {
-                      return;
-                    }
-                    if (stepCount < tableState.maxSteps) {
-                      tableState.setSectionStepCount(currentSection, stepCount + 1);
-                      HapticFeedback.selectionClick();
-                    }
-                  },
-                  enabled: stepCount < tableState.maxSteps,
-                  size: buttonSize,
-                ),
-              ],
-            ),
-          );
-        },
       ),
     );
   }
