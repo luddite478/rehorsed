@@ -700,6 +700,16 @@ void playback_set_master_volume(float volume01) {
     prnt_debug("🔊 [PLAYBACK] Master volume set to %d/256 (%.3f)", vol256, volume01);
 }
 
+void playback_set_master_reverb(float wet01) {
+    if (!g_initialized || !sunvox_wrapper_is_initialized()) return;
+    sunvox_wrapper_set_master_reverb(wet01);
+}
+
+void playback_set_master_eq_band(int band, int gain_0_512) {
+    if (!g_initialized || !sunvox_wrapper_is_initialized()) return;
+    sunvox_wrapper_set_master_eq_band(band, gain_0_512);
+}
+
 // Enhanced playback logging control (for debugging)
 void playback_set_enhanced_logging(int enabled) {
     g_enhanced_playback_logging = enabled;

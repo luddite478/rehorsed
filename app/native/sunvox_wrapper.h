@@ -99,6 +99,12 @@ int sunvox_wrapper_render(float* buf, int frames);
 // Check if SunVox is initialized
 int sunvox_wrapper_is_initialized(void);
 
+// Master bus reverb wet (0..1). No-op if engine not ready.
+void sunvox_wrapper_set_master_reverb(float wet01);
+
+// Master 3-band EQ: band 0=Low, 1=Mid, 2=High; gain 0..512 (256 = unity).
+void sunvox_wrapper_set_master_eq_band(int band, int gain_0_512);
+
 // Debug: Dump all pattern information
 void sunvox_wrapper_debug_dump_patterns(const char* context);
 

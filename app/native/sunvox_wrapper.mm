@@ -40,6 +40,21 @@ extern "C" {
 #define SUNVOX_OUTPUT_MODULE 0           // Output module is always 0
 #define SUNVOX_BASE_NOTE 60              // Middle C (C4)
 
+// Master bus: all samplers feed the head of this chain; tail connects to SUNVOX_OUTPUT_MODULE.
+// Order is signal order (effects[0] -> effects[1] -> ...). Add new modules here and link
+// consecutive pairs in connect_master_effect_chain().
+#define MAX_MASTER_EFFECT_MODULES 8
+static int g_master_effect_modules[MAX_MASTER_EFFECT_MODULES];
+static int g_master_effect_module_count = 0;
+// Indices into g_master_effect_modules[] (creation order = signal order for the chain).
+enum {
+    MASTER_FX_EQ = 0,
+    MASTER_FX_REVERB = 1,
+};
+
+// SunVox "Reverb" module controller indices (psynths_reverb.cpp)
+#define SV_REVERB_CTL_WET 1
+
 // State
 static int g_sunvox_initialized = 0;
 static int g_section_patterns[MAX_SECTIONS]; // Pattern IDs for each section (-1 = not created)
@@ -79,6 +94,73 @@ static int sunvox_wrapper_is_cell_audible(int section, int col) {
     if (any_col_solo_for_layer && !table_get_layer_col_solo(layer, col_in_layer)) return 0;
 
     return 1;
+}
+
+// Create master effect modules and wire: samplers -> chain -> output.
+// Call with slot locked. On failure returns -1 (caller should unlock and abort init).
+static int connect_master_effect_chain(void) {
+    g_master_effect_module_count = 0;
+
+    int eq_mod = sv_new_module(SUNVOX_SLOT, "EQ", "MasterEQ", 40, 50, 0);
+    if (eq_mod < 0) {
+        prnt_err("❌ [SUNVOX] Failed to create master EQ: %d", eq_mod);
+        return -1;
+    }
+    if (g_master_effect_module_count >= MAX_MASTER_EFFECT_MODULES) {
+        prnt_err("❌ [SUNVOX] MAX_MASTER_EFFECT_MODULES too small");
+        return -1;
+    }
+    g_master_effect_modules[g_master_effect_module_count++] = eq_mod;
+
+    int reverb_mod = sv_new_module(SUNVOX_SLOT, "Reverb", "MasterReverb", 50, 50, 0);
+    if (reverb_mod < 0) {
+        prnt_err("❌ [SUNVOX] Failed to create master Reverb: %d", reverb_mod);
+        return -1;
+    }
+    if (g_master_effect_module_count >= MAX_MASTER_EFFECT_MODULES) {
+        prnt_err("❌ [SUNVOX] MAX_MASTER_EFFECT_MODULES too small");
+        return -1;
+    }
+    g_master_effect_modules[g_master_effect_module_count++] = reverb_mod;
+
+    // Link consecutive master effects
+    for (int k = 0; k < g_master_effect_module_count - 1; k++) {
+        int r = sv_connect_module(SUNVOX_SLOT, g_master_effect_modules[k],
+                                  g_master_effect_modules[k + 1]);
+        if (r < 0) {
+            prnt_err("❌ [SUNVOX] Failed to connect master FX %d -> %d: %d",
+                     g_master_effect_modules[k], g_master_effect_modules[k + 1], r);
+            return -1;
+        }
+    }
+    int tail = g_master_effect_modules[g_master_effect_module_count - 1];
+    int result = sv_connect_module(SUNVOX_SLOT, tail, SUNVOX_OUTPUT_MODULE);
+    if (result < 0) {
+        prnt_err("❌ [SUNVOX] Failed to connect master FX tail %d to output: %d", tail, result);
+        return -1;
+    }
+
+    int head = g_master_effect_modules[0];
+    for (int i = 0; i < MAX_SAMPLE_SLOTS; i++) {
+        int mod_id = g_sampler_modules[i];
+        result = sv_connect_module(SUNVOX_SLOT, mod_id, head);
+        if (result < 0) {
+            prnt_err("❌ [SUNVOX] Failed to connect sampler %d to master FX head %d: %d",
+                     i, head, result);
+            return -1;
+        }
+    }
+
+    // EQ: unity gain per band (psynths_eq.cpp: ctl 0–2, default 256).
+    int eq = g_master_effect_modules[MASTER_FX_EQ];
+    sv_set_module_ctl_value(SUNVOX_SLOT, eq, 0, 256, 0);
+    sv_set_module_ctl_value(SUNVOX_SLOT, eq, 1, 256, 0);
+    sv_set_module_ctl_value(SUNVOX_SLOT, eq, 2, 256, 0);
+
+    // Default: dry-only (wet 0). UI maps 0..1 -> wet ctl.
+    sv_set_module_ctl_value(SUNVOX_SLOT, g_master_effect_modules[MASTER_FX_REVERB],
+                            SV_REVERB_CTL_WET, 0, 0);
+    return 0;
 }
 
 // Initialize SunVox engine
@@ -182,8 +264,7 @@ int sunvox_wrapper_init(void) {
         g_section_patterns[i] = -1; // No pattern yet
     }
     
-    // Create sampler modules for each sample slot
-    // These will be connected to the output
+    // Create sampler modules for each sample slot; they connect to the master FX chain, then output.
     sv_lock_slot(SUNVOX_SLOT);
     
     for (int i = 0; i < MAX_SAMPLE_SLOTS; i++) {
@@ -204,12 +285,12 @@ int sunvox_wrapper_init(void) {
         }
         
         g_sampler_modules[i] = mod_id;
-        
-        // Connect sampler to output
-        result = sv_connect_module(SUNVOX_SLOT, mod_id, SUNVOX_OUTPUT_MODULE);
-        if (result < 0) {
-            prnt_err("❌ [SUNVOX] Failed to connect sampler %d to output: %d", i, result);
-        }        
+    }
+
+    if (connect_master_effect_chain() != 0) {
+        sv_unlock_slot(SUNVOX_SLOT);
+        sunvox_wrapper_cleanup();
+        return -1;
     }
     
     sv_unlock_slot(SUNVOX_SLOT);
@@ -247,6 +328,8 @@ void sunvox_wrapper_cleanup(void) {
     sv_deinit();
     
     g_sunvox_initialized = 0;
+
+    g_master_effect_module_count = 0;
     
     // Clear section patterns array
     for (int i = 0; i < MAX_SECTIONS; i++) {
@@ -254,6 +337,34 @@ void sunvox_wrapper_cleanup(void) {
     }
     
     prnt("✅ [SUNVOX] Cleanup complete");
+}
+
+// Master EQ band gain (band 0..2, gain 0..512). See MASTER_FX_EQ.
+extern "C" void sunvox_wrapper_set_master_eq_band(int band, int gain_0_512) {
+    if (!g_sunvox_initialized) return;
+    if (band < 0 || band > 2) return;
+    if (g_master_effect_module_count <= MASTER_FX_EQ) return;
+    if (gain_0_512 < 0) gain_0_512 = 0;
+    if (gain_0_512 > 512) gain_0_512 = 512;
+    int eq_mod = g_master_effect_modules[MASTER_FX_EQ];
+    sv_lock_slot(SUNVOX_SLOT);
+    sv_set_module_ctl_value(SUNVOX_SLOT, eq_mod, band, gain_0_512, 0);
+    sv_unlock_slot(SUNVOX_SLOT);
+}
+
+// Master reverb wet amount (0..1 -> SunVox wet ctl 0..256). Reverb module index: MASTER_FX_REVERB.
+extern "C" void sunvox_wrapper_set_master_reverb(float wet01) {
+    if (!g_sunvox_initialized) return;
+    if (g_master_effect_module_count <= MASTER_FX_REVERB) return;
+    if (wet01 < 0.0f) wet01 = 0.0f;
+    if (wet01 > 1.0f) wet01 = 1.0f;
+    int wet256 = (int)(wet01 * 256.0f);
+    if (wet256 < 0) wet256 = 0;
+    if (wet256 > 256) wet256 = 256;
+    int reverb_mod = g_master_effect_modules[MASTER_FX_REVERB];
+    sv_lock_slot(SUNVOX_SLOT);
+    sv_set_module_ctl_value(SUNVOX_SLOT, reverb_mod, SV_REVERB_CTL_WET, wet256, 0);
+    sv_unlock_slot(SUNVOX_SLOT);
 }
 
 // Load a sample into a SunVox sampler module

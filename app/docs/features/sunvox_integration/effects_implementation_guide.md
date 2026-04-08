@@ -1,6 +1,15 @@
 # Effects Implementation Guide
 
+This document has two parts:
+
+- **[Part I: Theory and design options](#part-i-theory-and-design-options)** — How SunVox separates pattern effects vs module controllers, trade-offs (presets vs column chains), and recommendations. Written as product-agnostic design material; examples refer to the original “Rehorsed” planning name where the text predates the current app.
+- **[Part II: Current implementation in HypnoPitch](#part-ii-current-implementation-in-hypnopitch)** — What HypnoPitch actually implements today: master-bus EQ and reverb, native wiring, FFI, Dart state, and UI entry points.
+
+---
+
 ## Table of Contents
+
+### Part I: Theory and design options
 
 1. [User Requirements](#user-requirements)
 2. [Understanding SunVox Effect Systems](#understanding-sunvox-effect-systems)
@@ -11,8 +20,22 @@
 7. [Alternative Solutions (Preset-Based)](#alternative-solutions-preset-based)
 8. [Implementation Details](#implementation-details)
 9. [Final Recommendations](#final-recommendations)
+10. [HypnoPitch scaling and reverb tails: investigation notes](#hypnopitch-scaling-and-reverb-tails-investigation-notes)
+
+### Part II: Current implementation in HypnoPitch
+
+1. [What is implemented vs not](#what-is-implemented-vs-not)
+2. [Master signal chain](#master-signal-chain)
+3. [Native layer (HypnoPitch)](#native-layer-hypnopitch)
+4. [Playback bridge (C API)](#playback-bridge-c-api)
+5. [Dart: FFI and PlaybackState](#dart-ffi-and-playbackstate)
+6. [UI (master controls)](#ui-master-controls)
+7. [Mapping notes (EQ dB vs SunVox)](#mapping-notes-eq-db-vs-sunvox)
+8. [Relation to Part I](#relation-to-part-i)
 
 ---
+
+## Part I: Theory and design options
 
 ## User Requirements
 
@@ -1058,3 +1081,138 @@ Effects per cell:
 - Simpler but less flexible
 
 **This column-based architecture is the best balance of control, performance, and flexibility!** 🎯
+
+---
+
+## HypnoPitch scaling and reverb tails: investigation notes
+
+This section records **design-time conclusions** (not a shipping spec): how **sections / layers / columns** combine with Part I, and what the **bundled SunVox Reverb** actually does regarding **tails**. Source for DSP behavior: [`app/native/sunvox_lib/lib_sunvox/psynth/psynths_reverb.cpp`](../../../native/sunvox_lib/lib_sunvox/psynth/psynths_reverb.cpp).
+
+### Problem: what actually explodes vs what multiplies
+
+| Pitfall | Why |
+|--------|-----|
+| **Preset explosion** | One module per *combination* of discrete FX levels (e.g. reverb × delay × filter steps) scales as a **product** — see [The Combinatorial Explosion Problem](#the-combinatorial-explosion-problem). Unrelated to “max sections = 100” in the project data. |
+| **Parallel module paths** | Module-based FX (reverb/delay/filter as **controllers** on real modules) needs **one independently routable path** per **simultaneously sounding** voice group. That scales with **concurrency**, not with how many section indices exist in the song. |
+| **Sections in time** | Stored section count (e.g. 100) is mostly **data** (automation/presets). **Runtime** usually **reuses** a fixed graph and loads the **active** section’s parameters — unless multiple sections must be **audible at once**. |
+| **Section boundaries + tails** | Changing **global** insert FX on a **single** shared reverb can **reshape** everything currently passing through it; a separate issue from “notes not cut” between patterns. |
+
+### HypnoPitch-oriented layout (reference)
+
+Product shape discussed for HypnoPitch: **composition split into sections in time**; each section has **5 layers** × **4 columns**; **layers play concurrently**.
+
+- **Per-column** module FX ⇒ up to **layers × columns** parallel chains (e.g. 5×4 = 20), if every layer-column pair needs **different** insert FX at the same time — same idea as [column chains](#the-solution-column-based-effect-chains), but replicated per layer.
+- **Per-layer only** (no per-column FX) ⇒ sum each layer’s columns into a **layer bus**, then **one effect chain per layer** ⇒ **five** parallel FX paths (plus sampler count), fewer modules than a full grid.
+- **Column canceling** (one active note per column **within a layer**) still matters for **safe** controller updates **inside** that layer’s routing; **layers** stack, so canceling does **not** apply across layers.
+
+### SunVox “Reverb” module — verified behavior (tails)
+
+From `psynths_reverb.cpp` render path:
+
+- Output is built as **wet × (comb/allpass processing)** plus **dry × input** (`ctl_wet` scales the processed path; `ctl_dry` adds the direct input after processing).
+- Setting **`ctl_wet` to 0** multiplies the **entire** processed (reverb) component by zero → **audible tail from that path stops**, even if energy still circulates internally. So **wet is the wrong control** for “stop sending new material but keep decay.”
+- **Buffer clears** that actually **wipe** tail state happen in **`clean_filters()`**, used from **`PS_CMD_CLEAN`** and setup — not from every knob tweak.
+- **Any** controller change sets `filters_reinit_request` (reinit/recalc/realloc on next render); that is **not** the same as clearing buffers, but **room size / mode / seed**-style changes can resize buffers — treat **big** parameter jumps at section boundaries as a **risk** for continuity unless tested.
+
+### Non–tail-cutting direction (routing)
+
+For **audible** tails across section or mix changes:
+
+1. Prefer **send / return** style wiring: **gain (e.g. Amplifier) before the Reverb** = **send**; keep Reverb **wet** in a range where the return is still **audible** while decaying; use **dry path + mixer** for direct sound.
+2. **Do not** use **Reverb wet → 0** as the primary “mute FX for the next section” — it **mutes the return** and kills the tail.
+3. If you need **two** independent decaying spaces (e.g. old vs new section color), plan **two** reverb instances or an explicit **crossfade/overlap** — one Reverb has **one** internal state.
+
+Current HypnoPitch **Part II** graph is **samplers → master EQ → master Reverb → output** (shared insert). Evolving toward tails-friendly behavior implies **graph** changes (e.g. per-layer buses, sends, mix points), not only FFI sliders on the existing single Reverb.
+
+---
+
+## Part II: Current implementation in HypnoPitch
+
+This section describes the **live codebase** (paths relative to the app package: `app/`).
+
+### What is implemented vs not
+
+| Area | Status in HypnoPitch |
+|------|----------------------|
+| **Master volume** | Implemented: SunVox slot volume via `sv_volume` (0…256). |
+| **Master bus EQ** | Implemented: SunVox **EQ** module, three bands (Low / Mid / High), gain 0…512 per band. |
+| **Master bus reverb** | Implemented: SunVox **Reverb** module, wet amount 0…256 (UI 0…1 float). |
+| **Per-cell pattern effects** (vibrato, slide, one effect per cell in pattern data) | Not implemented in the product flow described here; Part I still applies if we add them. |
+| **Per-cell / per-sample module FX** (sampler reverb, filter, etc. as in Part I) | Not implemented for mixing; samplers are gain-staged to max internal volume, audio is shaped on the **shared master chain** instead. |
+| **Column-based effect chains** (Part I “optimal” architecture) | Not implemented; current graph is **one sampler module per sample slot** feeding **one** shared master FX chain. |
+
+### Master signal chain
+
+All sampler modules connect to the **head** of a single master effect chain. The chain order is **signal order** (first module → next → … → output):
+
+```
+[Sampler 0]
+[Sampler 1]     ──► [ EQ ] ──► [ Reverb ] ──► [ Output module 0 ]
+...
+[Sampler N-1]
+```
+
+- **EQ** is created first in the chain (`MASTER_FX_EQ = 0` in `g_master_effect_modules[]`).
+- **Reverb** follows (`MASTER_FX_REVERB = 1`).
+- The **tail** of the chain connects to SunVox output module id `0`.
+- Initialization, linking, and defaults live in `connect_master_effect_chain()` in [`app/native/sunvox_wrapper.mm`](../../../native/sunvox_wrapper.mm).
+
+Defaults at connect time:
+
+- EQ bands 0…2: **256** each (unity gain in SunVox EQ convention).
+- Reverb: **wet 0** (dry).
+
+### Native layer (HypnoPitch)
+
+| Symbol / area | Role |
+|-----------------|------|
+| `MAX_MASTER_EFFECT_MODULES`, `g_master_effect_modules[]` | Fixed array of master FX module ids; extend order here and in `connect_master_effect_chain()`. |
+| `MASTER_FX_EQ`, `MASTER_FX_REVERB` | Indices into `g_master_effect_modules[]` (creation order = audio order). |
+| `SV_REVERB_CTL_WET` | Reverb module wet control index (see comment referencing `psynths_reverb.cpp`). |
+| `sunvox_wrapper_set_master_eq_band(band, gain_0_512)` | `band` 0…2, `gain_0_512` clamped 0…512; calls `sv_set_module_ctl_value` on the EQ module. |
+| `sunvox_wrapper_set_master_reverb(wet01)` | Maps float 0…1 to wet **0…256**; sets Reverb wet controller. |
+| Sampler load path | Sets sampler internal volume controller (e.g. ctl 4) to max for headroom; does **not** implement per-sample reverb/filter chains. |
+
+Declared for other translation units in [`app/native/sunvox_wrapper.h`](../../../native/sunvox_wrapper.h).
+
+### Playback bridge (C API)
+
+[`app/native/playback.h`](../../../native/playback.h) exposes:
+
+- `playback_set_master_volume(float volume01)` — forwards to `sv_volume` on the SunVox slot (0…256).
+- `playback_set_master_reverb(float wet01)` — calls `sunvox_wrapper_set_master_reverb`.
+- `playback_set_master_eq_band(int band, int gain_0_512)` — calls `sunvox_wrapper_set_master_eq_band`.
+
+Implementations: [`app/native/playback_sunvox.mm`](../../../native/playback_sunvox.mm).
+
+### Dart: FFI and PlaybackState
+
+[`app/lib/ffi/playback_bindings.dart`](../../../lib/ffi/playback_bindings.dart) loads the native symbols (`playback_set_master_volume`, `playback_set_master_reverb`, `playback_set_master_eq_band`).
+
+[`app/lib/state/sequencer/playback.dart`](../../../lib/state/sequencer/playback.dart) — `PlaybackState`:
+
+- **Master volume**: `ValueNotifier<double>` `masterVolumeNotifier`, `setMasterVolume`.
+- **Master reverb**: `masterReverbWetNotifier`, `setMasterReverbWet` (0.0…1.0).
+- **Master EQ**: three notifiers `masterEqLowDbNotifier`, `masterEqMidDbNotifier`, `masterEqHighDbNotifier`, integer **dB** in **`[masterEqMinDb, masterEqMaxDb]` = [-12, +6]**.
+- `setMasterEqBandDb(band, db)` updates the notifier and calls FFI with **`_dbToSunvoxGain512(db)`**: treats SunVox EQ as linear gain = ctl/256, maps dB → amplitude with \(10^{dB/20}\), then `round(256 * gain)` clamped to **0…512**.
+- On successful `playbackInit()`, initial master volume, reverb, and all three EQ bands are pushed to native once.
+
+### UI (master controls)
+
+[`app/lib/widgets/sequencer/v1/sound_settings.dart`](../../../lib/widgets/sequencer/v1/sound_settings.dart):
+
+- Master header includes **VOL**, **RVB**, **EQ**, **BPM** (and related wiring).
+- Reverb: slider (or equivalent) bound to `masterReverbWetNotifier` / `setMasterReverbWet`.
+- EQ: band label **LOW / MID / HIGH** with chevrons to cycle band; [`WheelSelectWidget`](../../../lib/widgets/sequencer/v1/wheel_select_widget.dart) shows dB for the active band and calls `setMasterEqBandDb`.
+
+### Mapping notes (EQ dB vs SunVox)
+
+- UI exposes asymmetric **−12…+6 dB** to match practical boost/cut in one control range.
+- Native stores **per-band gain 0…512**; **256 ≈ 0 dB** (unity linear gain in the SunVox EQ convention used here).
+- Further bands or different curves would adjust `_dbToSunvoxGain512` and/or native clamps.
+
+### Relation to Part I
+
+- **Part I** explains why per-note “studio” FX often need **either** pattern events **or** separate modules / routing; it argues for **column chains** or **preset** strategies when you need **different** reverb/delay/filter per cell.
+- **[HypnoPitch scaling and reverb tails: investigation notes](#hypnopitch-scaling-and-reverb-tails-investigation-notes)** summarizes **section/layer/column** scaling, **verified** SunVox Reverb tail behavior from `psynths_reverb.cpp`, and **send/return** vs **wet** as a mute.
+- **Part II** reflects the **current** product choice: **global** master EQ + reverb for simplicity and low module count, with **no** per-cell effect graph yet. Adding per-cell behavior should follow the Part I constraints (pattern effect slot limit, module controller bleed-over) and pick an architecture explicitly before extending `sunvox_wrapper` / playback.

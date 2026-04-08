@@ -25,6 +25,8 @@ enum SliderType {
   pitch,
   bpm,
   steps,
+  /// Same thumb/format as [volume] (0–100); distinct label for value overlay.
+  reverb,
 }
 
 // Custom thumb shape that displays the current value
@@ -136,6 +138,8 @@ class _GenericSliderState extends State<GenericSlider> {
     switch (widget.type) {
       case SliderType.volume:
         return 'VOLUME';
+      case SliderType.reverb:
+        return 'REVERB';
       case SliderType.pitch:
         return 'PITCH';
       case SliderType.bpm:
@@ -148,6 +152,7 @@ class _GenericSliderState extends State<GenericSlider> {
   String _formatValue(double value) {
     switch (widget.type) {
       case SliderType.volume:
+      case SliderType.reverb:
         final volumePercent = (value * 100).round();
         return '$volumePercent';
       case SliderType.pitch:

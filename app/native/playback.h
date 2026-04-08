@@ -152,6 +152,14 @@ void switch_to_section(int section_index);
 __attribute__((visibility("default"))) __attribute__((used))
 void playback_set_master_volume(float volume01);
 
+// Master bus reverb wet (0.0 .. 1.0)
+__attribute__((visibility("default"))) __attribute__((used))
+void playback_set_master_reverb(float wet01);
+
+// Master EQ: band 0..2, gain 0..512 (256 = unity)
+__attribute__((visibility("default"))) __attribute__((used))
+void playback_set_master_eq_band(int band, int gain_0_512);
+
 // Enhanced playback logging (for debugging)
 __attribute__((visibility("default"))) __attribute__((used))
 void playback_set_enhanced_logging(int enabled);

@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'dart:math' as math;
 import 'dart:ffi' as ffi;
 import '../../ffi/playback_bindings.dart';
 import 'table.dart';
@@ -94,6 +95,10 @@ class PlaybackState extends ChangeNotifier {
   static const int minLoopsPerSection = 1;
   static const int maxLoopsPerSection = 1024;
 
+  /// Master EQ wheel range (dB); maps to SunVox EQ gain 0..512 via linear amplitude.
+  static const int masterEqMinDb = -12;
+  static const int masterEqMaxDb = 6;
+
   final PlaybackBindings _playback_ffi;
   final TableState _tableState;
 
@@ -103,6 +108,7 @@ class PlaybackState extends ChangeNotifier {
   // Private state fields
   int _bpm = 120;
   double _masterVolume = 1.0; // 0.0..1.0
+  double _masterReverbWet = 0.0; // 0.0..1.0 master bus reverb wet
   int _currentStep = 0;
   bool _isPlaying = false;
   bool _songMode = false;
@@ -122,6 +128,11 @@ class PlaybackState extends ChangeNotifier {
   final ValueNotifier<bool> isPlayingNotifier = ValueNotifier<bool>(false);
   final ValueNotifier<int> bpmNotifier = ValueNotifier<int>(120);
   final ValueNotifier<double> masterVolumeNotifier = ValueNotifier<double>(1.0);
+  final ValueNotifier<double> masterReverbWetNotifier =
+      ValueNotifier<double>(0.0);
+  final ValueNotifier<int> masterEqLowDbNotifier = ValueNotifier<int>(0);
+  final ValueNotifier<int> masterEqMidDbNotifier = ValueNotifier<int>(0);
+  final ValueNotifier<int> masterEqHighDbNotifier = ValueNotifier<int>(0);
   final ValueNotifier<bool> songModeNotifier = ValueNotifier<bool>(false);
   final ValueNotifier<int> regionStartNotifier = ValueNotifier<int>(0);
   final ValueNotifier<int> regionEndNotifier = ValueNotifier<int>(16);
@@ -148,6 +159,13 @@ class PlaybackState extends ChangeNotifier {
       // Apply initial master volume to native engine
       try {
         _playback_ffi.playbackSetMasterVolume(_masterVolume);
+        _playback_ffi.playbackSetMasterReverb(_masterReverbWet);
+        _playback_ffi.playbackSetMasterEqBand(
+            0, _dbToSunvoxGain512(masterEqLowDbNotifier.value));
+        _playback_ffi.playbackSetMasterEqBand(
+            1, _dbToSunvoxGain512(masterEqMidDbNotifier.value));
+        _playback_ffi.playbackSetMasterEqBand(
+            2, _dbToSunvoxGain512(masterEqHighDbNotifier.value));
       } catch (_) {}
     } else {
       debugPrint(
@@ -210,6 +228,44 @@ class PlaybackState extends ChangeNotifier {
     if (_initialized) {
       _playback_ffi.playbackSetMasterVolume(v);
     }
+  }
+
+  /// Master bus reverb wet amount 0.0..1.0 (additional master FX setters may follow).
+  void setMasterReverbWet(double wet01) {
+    final v = wet01.clamp(0.0, 1.0);
+    _masterReverbWet = v;
+    masterReverbWetNotifier.value = v;
+    if (_initialized) {
+      _playback_ffi.playbackSetMasterReverb(v);
+    }
+  }
+
+  /// band: 0 = Low, 1 = Mid, 2 = High; db in [masterEqMinDb, masterEqMaxDb].
+  void setMasterEqBandDb(int band, int db) {
+    final v = db.clamp(masterEqMinDb, masterEqMaxDb);
+    switch (band) {
+      case 0:
+        masterEqLowDbNotifier.value = v;
+        break;
+      case 1:
+        masterEqMidDbNotifier.value = v;
+        break;
+      case 2:
+        masterEqHighDbNotifier.value = v;
+        break;
+      default:
+        return;
+    }
+    if (_initialized) {
+      _playback_ffi.playbackSetMasterEqBand(band, _dbToSunvoxGain512(v));
+    }
+  }
+
+  /// SunVox EQ uses linear gain = ctl/256; map dB to 0..512.
+  static int _dbToSunvoxGain512(int db) {
+    final clamped = db.clamp(masterEqMinDb, masterEqMaxDb);
+    final g = math.pow(10.0, clamped / 20.0).toDouble();
+    return (256 * g).round().clamp(0, 512);
   }
 
   // NOTE: sv_audio_callback2 bypass methods removed - mic bypasses SunVox entirely now
@@ -502,6 +558,10 @@ class PlaybackState extends ChangeNotifier {
     currentSectionLoopNotifier.dispose();
     currentSectionLoopsNumNotifier.dispose();
     masterVolumeNotifier.dispose();
+    masterReverbWetNotifier.dispose();
+    masterEqLowDbNotifier.dispose();
+    masterEqMidDbNotifier.dispose();
+    masterEqHighDbNotifier.dispose();
 
     super.dispose();
   }

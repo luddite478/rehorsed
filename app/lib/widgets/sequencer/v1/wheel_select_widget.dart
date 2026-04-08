@@ -1,9 +1,25 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:wheel_chooser/wheel_chooser.dart';
 import '../../../utils/app_colors.dart';
 import '../../tutorial_pulse_widget.dart';
+
+/// Theme text only — [GoogleFonts.config.allowRuntimeFetching] is false in main.dart
+/// so packaged Google Fonts must not be used here.
+TextStyle _wheelLabelStyle(
+  BuildContext context, {
+  required double fontSize,
+  required FontWeight fontWeight,
+  required Color color,
+}) {
+  final base = Theme.of(context).textTheme.titleMedium ?? const TextStyle();
+  return base.copyWith(
+    fontSize: fontSize,
+    fontWeight: fontWeight,
+    color: color,
+    height: 1.0,
+  );
+}
 
 /// A reusable horizontal wheel selector widget for numeric values
 /// 
@@ -117,17 +133,17 @@ class WheelSelectWidget extends StatelessWidget {
               itemSize: availableWidth * 0.10, // Tighter spacing between values
               perspective: 0.003, // Slightly more perspective for depth
               magnification: 1.3, // Magnify center item
-              selectTextStyle: GoogleFonts.crimsonPro(
-                color: AppColors.sequencerAccent,
-                fontSize: availableHeight * 0.38,
+              selectTextStyle: _wheelLabelStyle(
+                context,
+                fontSize: availableHeight * 0.30,
                 fontWeight: FontWeight.w700,
-                height: 1.0, // Tight line height to prevent overflow
+                color: AppColors.sequencerAccent,
               ),
-              unSelectTextStyle: GoogleFonts.crimsonPro(
-                color: AppColors.sequencerLightText.withOpacity(0.6),
-                fontSize: availableHeight * 0.28,
+              unSelectTextStyle: _wheelLabelStyle(
+                context,
+                fontSize: availableHeight * 0.22,
                 fontWeight: FontWeight.w500,
-                height: 1.0, // Tight line height to prevent overflow
+                color: AppColors.sequencerLightText.withOpacity(0.6),
               ),
             ),
           ),
@@ -270,13 +286,23 @@ class _CustomWheelWithGradientState extends State<_CustomWheelWithGradient> {
   late FixedExtentScrollController _scrollController;
   bool _isUserScrolling = false;
 
+  /// Ignore [onSelectedItemChanged] while the wheel is positioned programmatically
+  /// or before the first layout settles — otherwise magnification / snap can report
+  /// an index off by one (e.g. +1 dB instead of 0) for the HIGH band column.
+  bool _suppressSelectionCallback = true;
+
   @override
   void initState() {
     super.initState();
     _scrollController = FixedExtentScrollController(initialItem: widget.selectedIndex);
-    
+
     // Listen to scroll activity to detect when user is actively scrolling
     _scrollController.addListener(_onScrollChanged);
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _suppressSelectionCallback = false;
+    });
   }
 
   void _onScrollChanged() {
@@ -289,13 +315,23 @@ class _CustomWheelWithGradientState extends State<_CustomWheelWithGradient> {
     }
   }
 
+  void _jumpToIndexWithoutNotifyingParent(int index) {
+    _suppressSelectionCallback = true;
+    _scrollController.jumpToItem(index);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        _suppressSelectionCallback = false;
+      }
+    });
+  }
+
   @override
   void didUpdateWidget(_CustomWheelWithGradient oldWidget) {
     super.didUpdateWidget(oldWidget);
     // Only jump to new position if user is not actively scrolling
     // This prevents fighting between user gesture and programmatic updates
     if (oldWidget.selectedIndex != widget.selectedIndex && !_isUserScrolling) {
-      _scrollController.jumpToItem(widget.selectedIndex);
+      _jumpToIndexWithoutNotifyingParent(widget.selectedIndex);
     }
   }
 
@@ -316,9 +352,11 @@ class _CustomWheelWithGradientState extends State<_CustomWheelWithGradient> {
         diameterRatio: 5.0,
         perspective: 0.003,
         squeeze: 0.8,
-        magnification: 1.3,
-        useMagnifier: true,
+        // Magnifier + useMagnifier caused off-by-one selected index vs. 0 dB center.
+        magnification: 1.0,
+        useMagnifier: false,
         onSelectedItemChanged: (index) {
+          if (_suppressSelectionCallback) return;
           widget.onValueChanged(index);
         },
         physics: const FixedExtentScrollPhysics(),
@@ -344,16 +382,33 @@ class _CustomWheelWithGradientState extends State<_CustomWheelWithGradient> {
                     final opacity = (1.0 - (distance * 0.25)).clamp(0.7, 1.0);
                     final isSelected = distance < 0.5;
 
-                    Widget label = Text(
-                      widget.items[index],
-                      textAlign: TextAlign.center,
-                      style: GoogleFonts.crimsonPro(
-                        color: isSelected
-                            ? AppColors.sequencerAccent
-                            : AppColors.sequencerLightText.withOpacity(opacity),
-                        fontSize: widget.availableHeight * 0.38,
-                        fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
-                        height: 1.0,
+                    final itemSlotWidth = widget.availableWidth * 0.10;
+                    final fontSize = isSelected
+                        ? widget.availableHeight * 0.30
+                        : widget.availableHeight * 0.22;
+                    Widget label = SizedBox(
+                      width: itemSlotWidth,
+                      height: widget.availableHeight,
+                      child: Center(
+                        child: FittedBox(
+                          fit: BoxFit.scaleDown,
+                          child: Text(
+                            widget.items[index],
+                            textAlign: TextAlign.center,
+                            maxLines: 1,
+                            style: _wheelLabelStyle(
+                              context,
+                              fontSize: fontSize,
+                              fontWeight: isSelected
+                                  ? FontWeight.w700
+                                  : FontWeight.w500,
+                              color: isSelected
+                                  ? AppColors.sequencerAccent
+                                  : AppColors.sequencerLightText
+                                      .withOpacity(opacity),
+                            ),
+                          ),
+                        ),
                       ),
                     );
                     if (widget.tutorialItemKey != null &&

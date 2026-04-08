@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../../../utils/app_colors.dart';
 import 'package:provider/provider.dart';
 import '../../../state/sequencer/table.dart';
@@ -105,7 +106,7 @@ class SoundSettingsWidget extends StatefulWidget {
     return const SoundSettingsWidget(
       type: SettingsType.master,
       title: 'Master Settings',
-      headerButtons: ['VOL', 'BPM'],
+      headerButtons: ['VOL', 'RVB', 'EQ', 'BPM'],
       closeAction: _noop,
       noDataMessage: 'Master controls not available',
       noDataIcon: Icons.settings,
@@ -140,6 +141,9 @@ class _SoundSettingsWidgetState extends State<SoundSettingsWidget> {
   // Processing timers to stop spinner heuristically
   Timer? _processingStopTimer; // fallback (kept in case polling misses)
   Timer? _processingPollTimer;
+  /// Master EQ: 0 = Low, 1 = Mid, 2 = High (which band the wheel edits).
+  int _masterEqBand = 0;
+
   // Debounce timers for volume
   Timer? _sampleVolumeDebounceTimer;
   Timer? _cellVolumeDebounceTimer;
@@ -756,6 +760,10 @@ class _SoundSettingsWidgetState extends State<SoundSettingsWidget> {
         return _buildBPMControl(sequencer, height, padding, fontSize);
       case 'VOL':
         return _buildMasterVolumeControl(sequencer, height, padding, fontSize);
+      case 'RVB':
+        return _buildMasterReverbControl(sequencer, height, padding, fontSize);
+      case 'EQ':
+        return _buildMasterEqControl(sequencer, height, padding, fontSize);
       // case 'COMP':
       //   return _buildPlaceholderControl('COMP', 'Compression settings', height, padding, fontSize);
       // case 'EQ':
@@ -813,6 +821,249 @@ class _SoundSettingsWidgetState extends State<SoundSettingsWidget> {
           sliderOverlay: context.read<SliderOverlayState>(),
           contextLabel: 'Master',
         ),
+      ),
+    );
+  }
+
+  Widget _buildMasterReverbControl(
+      PlaybackState sequencer, double height, double padding, double fontSize) {
+    return Container(
+      padding: EdgeInsets.symmetric(
+        horizontal: padding * 0.5,
+        vertical: padding * 0.3,
+      ),
+      decoration: BoxDecoration(
+        color: AppColors.sequencerSurfaceRaised,
+        borderRadius: BorderRadius.circular(2),
+        border: Border.all(
+          color: AppColors.sequencerBorder,
+          width: 1,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.sequencerShadow,
+            blurRadius: 2,
+            offset: const Offset(0, 1),
+          ),
+          BoxShadow(
+            color: AppColors.sequencerSurfaceRaised,
+            blurRadius: 1,
+            offset: const Offset(0, -0.5),
+          ),
+        ],
+      ),
+      child: ValueListenableBuilder<double>(
+        valueListenable: sequencer.masterReverbWetNotifier,
+        builder: (context, wet, _) => GenericSlider(
+          value: wet,
+          min: 0.0,
+          max: 1.0,
+          divisions: 100,
+          type: SliderType.reverb,
+          onChanged: (value) => sequencer.setMasterReverbWet(value),
+          height: height,
+          sliderOverlay: context.read<SliderOverlayState>(),
+          contextLabel: 'Master',
+        ),
+      ),
+    );
+  }
+
+  ValueNotifier<int> _masterEqNotifierForBand(PlaybackState sequencer, int band) {
+    switch (band) {
+      case 0:
+        return sequencer.masterEqLowDbNotifier;
+      case 1:
+        return sequencer.masterEqMidDbNotifier;
+      case 2:
+        return sequencer.masterEqHighDbNotifier;
+      default:
+        return sequencer.masterEqLowDbNotifier;
+    }
+  }
+
+  String _formatMasterEqDbWheel(int v) {
+    if (v == 0) return '0';
+    return v > 0 ? '+$v' : '$v';
+  }
+
+  static const List<String> _kMasterEqBandLabels = ['LOW', 'MID', 'HIGH'];
+
+  String _masterEqBandLabel(int band) =>
+      _kMasterEqBandLabels[band.clamp(0, 2)];
+
+  void _cycleMasterEqBand(int delta) {
+    setState(() {
+      _masterEqBand = (_masterEqBand + delta + 3) % 3;
+    });
+    HapticFeedback.selectionClick();
+  }
+
+  /// Same visual pattern as section loop arrows.
+  Widget _buildMasterEqArrowButton({
+    required IconData icon,
+    required VoidCallback onTap,
+    required double size,
+  }) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(
+          color: AppColors.sequencerSurfaceRaised,
+          borderRadius: BorderRadius.circular(4),
+          boxShadow: [
+            BoxShadow(
+              color: AppColors.sequencerShadow,
+              blurRadius: 2,
+              offset: const Offset(0, 1),
+            ),
+          ],
+        ),
+        child: Center(
+          child: Icon(
+            icon,
+            color: AppColors.sequencerAccent,
+            size: size * 0.70,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMasterEqControl(
+      PlaybackState sequencer, double height, double padding, double fontSize) {
+    return Container(
+      padding: EdgeInsets.symmetric(
+        horizontal: padding * 0.5,
+        vertical: padding * 0.3,
+      ),
+      decoration: BoxDecoration(
+        color: AppColors.sequencerSurfaceRaised,
+        borderRadius: BorderRadius.circular(2),
+        border: Border.all(
+          color: AppColors.sequencerBorder,
+          width: 1,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.sequencerShadow,
+            blurRadius: 2,
+            offset: const Offset(0, 1),
+          ),
+          BoxShadow(
+            color: AppColors.sequencerSurfaceRaised,
+            blurRadius: 1,
+            offset: const Offset(0, -0.5),
+          ),
+        ],
+      ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final maxH = constraints.maxHeight;
+          final buttonSize = (maxH * 0.72).clamp(22.0, 52.0);
+          final labelBoxHeight = buttonSize;
+          final spacing = (maxH * 0.12).clamp(2.0, 8.0);
+
+          final gapBesideDivider = (padding * 0.35).clamp(4.0, 10.0);
+
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(
+                flex: 2,
+                child: Padding(
+                  padding: EdgeInsets.only(right: gapBesideDivider),
+                  child: Center(
+                    child: Padding(
+                      padding: EdgeInsets.symmetric(horizontal: padding * 0.1),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          _buildMasterEqArrowButton(
+                            icon: Icons.chevron_left,
+                            size: buttonSize,
+                            onTap: () => _cycleMasterEqBand(-1),
+                          ),
+                          SizedBox(width: spacing),
+                          Expanded(
+                            child: Align(
+                              alignment: Alignment.center,
+                              child: Container(
+                                height: labelBoxHeight,
+                                constraints: const BoxConstraints(minWidth: 0),
+                                decoration: BoxDecoration(
+                                  color: AppColors.sequencerSurfacePressed,
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
+                                alignment: Alignment.center,
+                                child: FittedBox(
+                                  fit: BoxFit.scaleDown,
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 4.0),
+                                    child: Text(
+                                      _masterEqBandLabel(_masterEqBand),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        color: AppColors.sequencerAccent,
+                                        fontSize: labelBoxHeight * 0.42,
+                                        fontWeight: FontWeight.w700,
+                                        letterSpacing: 0.5,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                          SizedBox(width: spacing),
+                          _buildMasterEqArrowButton(
+                            icon: Icons.chevron_right,
+                            size: buttonSize,
+                            onTap: () => _cycleMasterEqBand(1),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              // 40% band column / 60% wheel (flex 2:3) with a vertical rule.
+              Container(
+                width: 1,
+                color: AppColors.sequencerBorder,
+              ),
+              Expanded(
+                flex: 3,
+                child: Padding(
+                  padding: EdgeInsets.only(left: gapBesideDivider),
+                  child: ClipRect(
+                    clipBehavior: Clip.hardEdge,
+                    child: ValueListenableBuilder<int>(
+                      key: ValueKey<int>(_masterEqBand),
+                      valueListenable:
+                          _masterEqNotifierForBand(sequencer, _masterEqBand),
+                      builder: (context, db, _) {
+                        return WheelSelectWidget(
+                          value: db,
+                          minValue: PlaybackState.masterEqMinDb,
+                          maxValue: PlaybackState.masterEqMaxDb,
+                          valueFormatter: _formatMasterEqDbWheel,
+                          onValueChanged: (v) =>
+                              sequencer.setMasterEqBandDb(_masterEqBand, v),
+                        );
+                      },
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          );
+        },
       ),
     );
   }

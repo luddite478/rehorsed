@@ -83,6 +83,12 @@ class PlaybackBindings {
     _playbackSetMasterVolumePtr = lib.lookup<ffi.NativeFunction<ffi.Void Function(ffi.Float)>>('playback_set_master_volume');
     playbackSetMasterVolume = _playbackSetMasterVolumePtr.asFunction<void Function(double)>();
 
+    _playbackSetMasterReverbPtr = lib.lookup<ffi.NativeFunction<ffi.Void Function(ffi.Float)>>('playback_set_master_reverb');
+    playbackSetMasterReverb = _playbackSetMasterReverbPtr.asFunction<void Function(double)>();
+
+    _playbackSetMasterEqBandPtr = lib.lookup<ffi.NativeFunction<ffi.Void Function(ffi.Int32, ffi.Int32)>>('playback_set_master_eq_band');
+    playbackSetMasterEqBand = _playbackSetMasterEqBandPtr.asFunction<void Function(int, int)>();
+
     // Recording
     _recordingStartPtr = lib.lookup<ffi.NativeFunction<ffi.Int32 Function(ffi.Pointer<ffi.Char>)>>('recording_start');
     recordingStart = _recordingStartPtr.asFunction<int Function(ffi.Pointer<ffi.Char>)>();
@@ -177,6 +183,12 @@ class PlaybackBindings {
   // Master volume
   late final ffi.Pointer<ffi.NativeFunction<ffi.Void Function(ffi.Float)>> _playbackSetMasterVolumePtr;
   late final void Function(double) playbackSetMasterVolume;
+
+  late final ffi.Pointer<ffi.NativeFunction<ffi.Void Function(ffi.Float)>> _playbackSetMasterReverbPtr;
+  late final void Function(double) playbackSetMasterReverb;
+
+  late final ffi.Pointer<ffi.NativeFunction<ffi.Void Function(ffi.Int32, ffi.Int32)>> _playbackSetMasterEqBandPtr;
+  late final void Function(int, int) playbackSetMasterEqBand;
 
   // Recording
   late final ffi.Pointer<ffi.NativeFunction<ffi.Int32 Function(ffi.Pointer<ffi.Char>)>> _recordingStartPtr;
